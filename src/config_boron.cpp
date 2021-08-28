@@ -1339,6 +1339,40 @@ const Coords* Config::moongateCoords(int phase) const {
 //--------------------------------------
 // Graphics config
 
+static ImageInfo* loadImageAtlas(const ConfigBoron* cfg, UBlockIt& bi) {
+    static const uint8_t atlasParam[4] = {
+        // name  'atlas   numA      spec
+        UT_WORD, UT_WORD, UT_COORD, UT_BLOCK
+    };
+    if (! validParam(bi, sizeof(atlasParam), atlasParam))
+        return NULL;
+
+    ImageInfo* info = new ImageInfo;
+    info->name     = ur_atom(bi.it);
+    info->filename = UR_INVALID_BUF;
+    info->resGroup = 0;
+    info->width    = numA[0];
+    info->height   = numA[1];
+    info->subImageCount = 0;
+    info->depth    = 0;
+    info->prescale = 0;
+    info->filetype = FTYPE_UNKNOWN;
+    info->tiles    = 0;
+    info->transparentIndex = -1;
+    info->fixup    = FIXUP_NONE;
+    info->image    = NULL;
+    info->subImages = NULL;
+
+    //info->subImages = subimage = new SubImage[info->subImageCount];
+
+    UBlockIt si;
+    ur_blockIt(cfg->ut, &si, bi.it+3);
+    ur_foreach(si) {
+    }
+
+    return info;
+}
+
 static ImageInfo* loadImageInfo(const ConfigBoron* cfg, UBlockIt& bi) {
     static const uint8_t imageParam[4] = {
         // name  filename   numA      numB
@@ -1432,7 +1466,9 @@ static ImageSet* loadImageSet(const ConfigBoron* cfg, UBlockIt& bi) {
     UBlockIt sit;
     ur_blockIt(cfg->ut, &sit, bi.it+2);
     while (sit.it != sit.end) {
-        ImageInfo *info = loadImageInfo(cfg, sit);
+        ImageInfo* info = loadImageAtlas(cfg, sit);
+        if (! info)
+            info = loadImageInfo(cfg, sit);
         dup = set->info.find(info->name);
         if (dup != set->info.end()) {
             delete dup->second;
