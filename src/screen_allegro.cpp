@@ -233,6 +233,13 @@ void screenInit_sys(const Settings* settings, int reset) {
     // as the context is lost when mucking with bitmaps.
     al_set_current_opengl_context(sa->disp);
 
+#ifdef _WIN32
+    if (! reset) {
+        if (! gladLoadGLLoader((GLADloadproc) al_get_opengl_proc_address))
+            errorFatal("Unable to get OpenGL function addresses");
+    }
+#endif
+
     if (! gpu_init(&sa->gpu, dw, dh, settings->scale))
         errorFatal("Unable to initialize OpenGL resources");
 #endif
