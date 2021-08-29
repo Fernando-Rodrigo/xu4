@@ -279,7 +279,6 @@ bool gpu_init(void* res, int w, int h, int scale)
 
     // Set default state.
     glDisable(GL_DEPTH_TEST);
-    glDisable(GL_ALPHA_TEST);
     glDisable(GL_BLEND);
     glDisable(GL_CULL_FACE);
     glViewport(0, 0, w, h);
