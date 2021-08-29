@@ -76,6 +76,10 @@ static const float quadAttr[] = {
 #define DRAW_BUF_SIZE   (ATTR_STRIDE * 6 * 400)
 
 
+#ifdef _WIN32
+#include "glad.c"
+#endif
+
 static void printInfoLog(GLuint obj, int prog)
 {
     GLint infologLength;
