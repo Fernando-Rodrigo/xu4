@@ -61,6 +61,42 @@ static ALLEGRO_MOUSE_CURSOR* screenInitCursor(ALLEGRO_BITMAP* bmp, const char * 
     return al_create_mouse_cursor(bmp, hot_x, hot_y);
 }
 
+#ifdef __linux__
+extern Image* loadImage_png(U4FILE *file);
+
+static ALLEGRO_BITMAP* loadBitmapPng(const char* filename) {
+    U4FILE* uf = u4fopen_stdio(filename);
+    if (uf) {
+        Image* img = loadImage_png(uf);
+        u4fclose(uf);
+        if (img) {
+            ALLEGRO_BITMAP* bm;
+            const RGBA* col;
+            int x, y;
+
+            al_set_new_bitmap_flags(ALLEGRO_MEMORY_BITMAP);
+            bm = al_create_bitmap(img->w, img->h);
+
+            al_lock_bitmap(bm, ALLEGRO_PIXEL_FORMAT_ANY, ALLEGRO_LOCK_WRITEONLY);
+            al_set_target_bitmap(bm);
+
+            col = (const RGBA*) img->pixels;
+            for (y=0; y < img->h; ++y) {
+                for (x=0; x < img->w; ++x) {
+                    al_put_pixel(x, y, al_map_rgb(col->r, col->g, col->b));
+                    ++col;
+                }
+            }
+
+            al_unlock_bitmap(bm);
+            delete img;
+            return bm;
+        }
+    }
+    return NULL;
+}
+#endif
+
 
 #ifdef USE_GL
 #include "gpu_opengl.cpp"
@@ -122,6 +158,10 @@ void screenInit_sys(const Settings* settings, int* dim, int reset) {
         dflags |= ALLEGRO_FULLSCREEN;
     al_set_new_display_flags(dflags);
 
+#ifdef USE_GL
+    //al_set_new_display_option(ALLEGRO_ALPHA_SIZE, 8, ALLEGRO_REQUIRE);
+#endif
+
     sa->disp = al_create_display(dw, dh);
     if (! sa->disp)
         goto fatal;
@@ -130,7 +170,17 @@ void screenInit_sys(const Settings* settings, int* dim, int reset) {
     dim[1] = al_get_display_height(sa->disp);
 
     al_set_window_title(sa->disp, "Ultima IV");  // configService->gameName()
-    //al_set_display_icon(sa->disp, ALLEGRO_BITMAP*);  LoadBMP(ICON_FILE));
+
+#ifdef __linux__
+    {
+    ALLEGRO_BITMAP* bm =
+        loadBitmapPng("/usr/share/icons/hicolor/48x48/apps/xu4.png");
+    if (bm) {
+        al_set_display_icon(sa->disp, bm);
+        al_destroy_bitmap(bm);
+    }
+    }
+#endif
 
     // Can settings->gamma be applied?
 
@@ -148,9 +198,11 @@ void screenInit_sys(const Settings* settings, int* dim, int reset) {
             errorWarning("Unsupported Allegro pixel format: %d", format);
             // Fall through...
         case ALLEGRO_PIXEL_FORMAT_ARGB_8888:
+        case ALLEGRO_PIXEL_FORMAT_XRGB_8888:
             state->formatIsABGR = false;
             break;
         case ALLEGRO_PIXEL_FORMAT_ABGR_8888:
+        case ALLEGRO_PIXEL_FORMAT_XBGR_8888:
             state->formatIsABGR = true;
             break;
     }
@@ -187,6 +239,13 @@ void screenInit_sys(const Settings* settings, int* dim, int reset) {
     // NOTE: The GL context is made current after creating the mouse cursors
     // as the context is lost when mucking with bitmaps.
     al_set_current_opengl_context(sa->disp);
+
+#ifdef _WIN32
+    if (! reset) {
+        if (! gladLoadGLLoader((GLADloadproc) al_get_opengl_proc_address))
+            errorFatal("Unable to get OpenGL function addresses");
+    }
+#endif
 
     if (! gpu_init(&sa->gpu, dw, dh, settings->scale))
         errorFatal("Unable to initialize OpenGL resources");

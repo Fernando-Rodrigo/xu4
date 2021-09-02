@@ -514,6 +514,11 @@ process-cfg [
                     layout-subimages first tok last img-blk at/width
                 ]
             )
+          | tok: set-word! 'atlas coord! block! (
+                apair img-blk mark-sol to-word first tok 'atlas
+                append img-blk third tok
+                append/block img-blk pick tok 4
+            )
         ]]
       | 'tileanimset set name word! (
             apair blk mark-sol 'tileanims name
@@ -584,8 +589,8 @@ process-cfg [
             apair blk at/image at/animation
             apair blk at/directions to-coord reduce [
                 none-zero at/frames
+                none-zero select [square 1 round 2] at/opaque
                 attribute-flags at [
-                    1 opaque
                     2 usesReplacementTileAsBackground
                     4 usesWaterReplacementTileAsBackground
                     8 tiledInDungeon

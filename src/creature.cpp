@@ -50,6 +50,7 @@ Creature::Creature() : Object(Object::CREATURE) {
 
 Creature::Creature(const Creature* cproto) : Object(Object::CREATURE) {
     *this = *cproto;
+    animId = ANIM_UNUSED;
 }
 
 std::string Creature::getName() const {
@@ -703,7 +704,7 @@ bool Creature::applyDamage(int damage, bool byplayer) {
             spawnOnDeath();
 
         // Remove yourself from the map
-        remove();
+        removeFromMaps();
         return false;
 
     case MSTAT_FLEEING:

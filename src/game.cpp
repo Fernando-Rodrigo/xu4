@@ -55,22 +55,10 @@
 #include "ios_helpers.h"
 #endif
 
-using namespace std;
-
 /*-----------------*/
 /* Functions BEGIN */
 
-/* main game functions */
-void gameAdvanceLevel(PartyMember *player);
-void gameInnHandler(void);
-void gameLostEighth(Virtue virtue);
-void gamePartyStarving(void);
-time_t gameTimeSinceLastCommand(void);
-
 /* spell functions */
-void gameCastSpell(unsigned int spell, int caster, int param);
-bool gameSpellMixHowMany(int spell, int num, Ingredients *ingredients);
-
 void mixReagents();
 bool mixReagentsForSpellU4(int spell);
 bool mixReagentsForSpellU5(int spell);
@@ -101,7 +89,6 @@ void gameCreatureAttack(Creature *obj);
 /* Functions END */
 /*---------------*/
 
-//extern Object *party[8];
 Context *c = NULL;
 
 MouseArea mouseAreas[] = {
@@ -2907,6 +2894,10 @@ void ztatsFor(int player) {
     ctrl.waitFor();
 }
 
+static time_t gameTimeSinceLastCommand() {
+    return time(NULL) - c->lastCommandTime;
+}
+
 /**
  * This function is called every quarter second.
  */
@@ -2933,6 +2924,8 @@ void GameController::timerFired() {
         }
 
         updateMoons(true);
+        anim_advance(&xu4.eventHandler->flourishAnim,
+                     float(eventTimerGranularity) * 0.001f);
         screenCycle();
         gameUpdateScreen();
 
@@ -3088,7 +3081,6 @@ bool GameController::checkMoongates() {
  */
 void gameFixupObjects(Map *map, const SaveGameMonsterRecord* table) {
     int i;
-    Object *obj;
     const SaveGameMonsterRecord *it;
     MapTile tile, oldTile;
     const UltimaSaveIds* usaveIds = xu4.config->usaveIds();
@@ -3116,7 +3108,7 @@ void gameFixupObjects(Map *map, const SaveGameMonsterRecord* table) {
                 const Creature *creature = Creature::getByTile(tile);
                 /* make sure we really have a creature */
                 if (creature) {
-                    obj = map->addCreature(creature, coords);
+                    Object* obj = map->addCreature(creature, coords);
 
                     // Preserve animation & previous state to keep round-trip
                     // load > save > load identical.
@@ -3127,20 +3119,13 @@ void gameFixupObjects(Map *map, const SaveGameMonsterRecord* table) {
                     obj->setPrevCoords(pc);
                 } else {
                     fprintf(stderr, "Error: A non-creature object was found in the creature section of the monster table. (Tile: %s)\n", tile.getTileType()->nameStr());
-                    obj = map->addObject(tile, oldTile, coords);
+                    map->addObject(tile, oldTile, coords);
                 }
             }
             else
-                obj = map->addObject(tile, oldTile, coords);
-
-            /* set the map for our object */
-            obj->setMap(map);
+                map->addObject(tile, oldTile, coords);
         }
     }
-}
-
-time_t gameTimeSinceLastCommand() {
-    return time(NULL) - c->lastCommandTime;
 }
 
 /**

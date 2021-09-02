@@ -2,6 +2,8 @@ options [
 	os_api: 'allegro	"Platform API ('allegro 'sdl)"
 	use_gl: false
 	use_boron: true
+	boron_sdk: none		"Path to Boron headers and libraries"
+	gpu_render: true
 	make_util: true
 ]
 
@@ -11,8 +13,12 @@ libxml2: does [
 		libs %xml2
 	]
 	win32 [
-		cflags "/DLIBXML_STATIC"
-		libs_from %../usr/lib [%libxml2_a]
+		either msvc [
+			cflags "/DLIBXML_STATIC"
+			libs_from %../usr/lib [%libxml2_a]
+		][
+			libs %xml2
+		]
 	]
 ]
 
@@ -20,6 +26,7 @@ exe %u4 [
 	include_from [%src %src/lzw %src/support]
 	win32 [
 		include_from %../usr/include
+		include-define "_WIN32"		; Needed to archive glad.*
 	]
 
 	switch os_api [
@@ -49,8 +56,19 @@ exe %u4 [
 
 	either use_boron [
 		cflags "-DUSE_BORON -DCONF_MODULE"
-		unix  [libs %boron]
-		win32 [libs_from %../usr/lib [%libboron]]
+		unix [
+			either [boron_sdk] [
+				include_from join boron_sdk %/include
+				libs_from    join boron_sdk %/lib %boron
+				libs %pthread
+			][
+				libs %boron
+			]
+		]
+		win32 [
+			libs_from %../usr/lib either msvc %libboron %boron
+			libs %ws2_32
+		]
 		sources_from %src [
 			%config_boron.cpp
 			%support/cdi.c
@@ -64,21 +82,31 @@ exe %u4 [
 		]
 	]
 
+	if use_gl [
+        if gpu_render [cflags "-DGPU_RENDER"]
+		cflags "-DUSE_GL"
+		opengl
+	]
+
 	unix [
 		cflags "-Wno-unused-parameter"
 		libs [%png %z]
-		if use_gl [
-				cflags "-DUSE_GL"
-				libs %GL
-		]
 	]
 	win32 [
-		libs_from %../usr/lib [%libpng16 %zlib]
-		libs [%User32]
+		either msvc [
+			libs_from %../usr/lib [%libpng16 %zlib]
+			libs [%User32]
+		][
+			cflags "-Wno-unused-parameter"
+			;lflags "-static-libgcc"	; Causes problems with Allegro libs.
+			lflags "-static-libstdc++"
+			libs [%png %z]
+		]
 	]
 	cflags {-DVERSION=\"KR-1.0\"}
 
 	sources_from %src [
+		%anim.c
 		%annotation.cpp
 		%aura.cpp
 		%camp.cpp

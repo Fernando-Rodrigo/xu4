@@ -1,6 +1,11 @@
 graphics: [
 
 imageset EGA [
+    texture: atlas 64,4096 [
+        shapes   0, 0
+       ;reticle 17, 0
+        charset 17,17
+    ]
     image (name: tiles filename: "u4/shapes.ega" width: 16 height: 4096 depth: 4 filetype: u4raw tiles: 256 fixup: blackTransparencyHack) [
         at 0,0 size 16,16
         ; subimages
@@ -395,6 +400,12 @@ imageset EGA [
 ]
 
 imageset EGA/VGA [
+    texture: atlas 64,4096 [
+        shapes       0, 0
+       ;reticle     17, 0
+        tile_guard  17,16
+        charset     17,81
+    ]
     image (name: tiles filename: "u4u/shapes.vga" width: 16 height: 4096 depth: 8 filetype: u4raw tiles: 256 fixup: blackTransparencyHack) [
         at 0,0 size 16,16
         ; subimages
