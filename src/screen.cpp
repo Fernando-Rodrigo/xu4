@@ -159,12 +159,22 @@ static void screenInit_data(Screen* scr, Settings& settings) {
 #ifdef USE_GL
     {
     ImageInfo* tinfo;
-    Symbol symbol[2];
-    xu4.config->internSymbols(symbol, 2, "texture reticle");
+    ImageInfo* minfo;
+    Symbol symbol[3];
+    uint32_t matId = 0;
+
+    xu4.config->internSymbols(symbol, 3, "texture material reticle");
     scr->textureInfo = tinfo = xu4.imageMgr->get(symbol[0]);
     if (tinfo) {
-        gpu_setTilesTexture(xu4.gpu, tinfo->tex, tinfo->tileTexCoord[3]);
-        scr->focusReticle = tinfo->subImageIndex.find(symbol[1])->second;
+        minfo = xu4.imageMgr->get(symbol[1]);
+        if (minfo) {
+            if (! minfo->tex)
+                minfo->tex = gpu_makeTexture(minfo->image);
+            matId = minfo->tex;
+        }
+
+        gpu_setTilesTexture(xu4.gpu, tinfo->tex, matId, tinfo->tileTexCoord[3]);
+        scr->focusReticle = tinfo->subImageIndex.find(symbol[2])->second;
     }
     }
 #endif
