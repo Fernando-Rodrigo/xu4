@@ -38,8 +38,7 @@ struct DngRoom {
     unsigned char party_south_start_y[8];
     unsigned char party_west_start_x[8];
     unsigned char party_west_start_y[8];
-    MapData  map_data;  // This is OK to change to MapData since sizeof(DngRoom) or
-                        // anything like it is not being used.
+    std::vector<TileId> map_data;
     unsigned char buffer[7];
 };
 
@@ -76,12 +75,12 @@ public:
     DungeonToken tokenForTile(TileId tid) const;
     DungeonToken currentToken();
     uint8_t currentSubToken();
-    DungeonToken tokenAt(const MapCoords& coords) const;
+    DungeonToken tokenAt(const Coords& coords) const;
 
-    bool ladderUpAt(MapCoords coords);
-    bool ladderDownAt(MapCoords coords);
+    bool ladderUpAt(const Coords& coords) const;
+    bool ladderDownAt(const Coords& coords) const;
 
-    bool validTeleportLocation(const MapCoords& coords) const;
+    bool validTeleportLocation(const Coords& coords) const;
     uint8_t* fillRawMap();
 
     // Properties

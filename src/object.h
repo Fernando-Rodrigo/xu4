@@ -65,7 +65,6 @@ public:
     void setAnimated(bool a = true)         { animated = a; }
 
     void placeOnMap(Map*, const Coords&);
-    Map *getMap();
     void removeFromMaps();
 
     bool setDirection(Direction d);

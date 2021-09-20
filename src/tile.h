@@ -100,8 +100,6 @@ public:
     static bool canAttackOverTile(const Tile *tile) {return tile->canAttackOver() != 0;}
 
 
-    Tile(int tid);
-    ~Tile();
     void setDirections(const char* dirs);
     const char* nameStr() const;
 
@@ -179,12 +177,11 @@ public:
     TileAnim *anim;     /**< The tile animation for this tile */
     uint8_t directionCount;
     uint8_t directions[7];  /**< Directions used = frames (if present) */
-
-private:
-    // Prevent copying.
-    Tile(const Tile&);
-    const Tile &operator=(const Tile&);
 };
 
+struct TileRenderData {
+    VisualId vid;       /**< The default rendering resource identifier */
+    VisualId scroll;    /**< The scrolling rendering resource identifier */
+};
 
 #endif
