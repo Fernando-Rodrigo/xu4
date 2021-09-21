@@ -13,6 +13,8 @@ void     gpu_setTilesTexture(void* res, uint32_t tex, uint32_t mat, float vDim);
 void     gpu_background(void* res, const float* color, const Image32* img);
 float*   gpu_beginDraw(void* res);
 void     gpu_endDraw(void* res, float* attr);
+float*   gpu_beginFx(void* res);
+void     gpu_endFx(void* res, float* attr);
 float*   gpu_emitQuad(float* attr, const float* drawRect, const float* uvRect);
 //void     gpu_render(void* res, const Image* screen);
 void     gpu_resetMap(void* res, const Map* map);

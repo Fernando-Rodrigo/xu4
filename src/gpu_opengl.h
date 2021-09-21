@@ -12,6 +12,8 @@
 enum GLObject {
     GLOB_DRAW_LIST0,
     GLOB_DRAW_LIST1,
+    GLOB_FX_LIST0,
+    GLOB_FX_LIST1,
     GLOB_QUAD,
     GLOB_MAP_CHUNK0,
     GLOB_MAP_CHUNK1,
@@ -62,8 +64,10 @@ struct OpenGLResources {
     GLuint tilesMat;            // Managed by user.
     float  tilesVDim;
     float  time;
-    int    dbuf;
-    float* dptr;
+    int    drawBuf;
+    int    fxBuf;
+    float* drawPtr;
+    float* fxPtr;
     int    blockCount;
     GLsizei mapChunkVertCount;
     uint16_t mapChunkDim;       // Size in tiles (width & height are the same).

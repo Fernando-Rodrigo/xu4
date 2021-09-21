@@ -133,6 +133,7 @@ static const float quadAttr[] = {
 };
 
 #define DRAW_BUF_SIZE   (ATTR_STRIDE * 6 * 400)
+#define FX_BUF_SIZE     (ATTR_STRIDE * 6 * 100)
 #define SHADOW_DIM      512
 
 
@@ -500,12 +501,16 @@ bool gpu_init(void* res, int w, int h, int scale)
     // Create our vertex buffers.
     glGenBuffers(GLOB_COUNT, gr->vbo);
 
-    // Reserve space in the double-buffered draw list.
+    // Reserve space in the double-buffered draw lists.
     for(int i = GLOB_DRAW_LIST0; i < GLOB_DRAW_LIST0+2; ++i) {
         glBindBuffer(GL_ARRAY_BUFFER, gr->vbo[i]);
         glBufferData(GL_ARRAY_BUFFER, DRAW_BUF_SIZE, NULL, GL_DYNAMIC_DRAW);
     }
-    gr->dbuf = 0;
+    for(int i = GLOB_FX_LIST0; i < GLOB_FX_LIST0+2; ++i) {
+        glBindBuffer(GL_ARRAY_BUFFER, gr->vbo[i]);
+        glBufferData(GL_ARRAY_BUFFER, FX_BUF_SIZE, NULL, GL_DYNAMIC_DRAW);
+    }
+    gr->drawBuf = gr->fxBuf = 0;
 
     // Create quad geometry.
     glBindBuffer(GL_ARRAY_BUFFER, gr->vbo[GLOB_QUAD]);
@@ -619,10 +624,10 @@ float* gpu_beginDraw(void* res)
 {
     OpenGLResources* gr = (OpenGLResources*) res;
 
-    glBindBuffer(GL_ARRAY_BUFFER, gr->vbo[ gr->dbuf ]);
-    gr->dptr = (GLfloat*) glMapBufferRange(GL_ARRAY_BUFFER, 0, DRAW_BUF_SIZE,
-                                           GL_MAP_WRITE_BIT);
-    return gr->dptr;
+    glBindBuffer(GL_ARRAY_BUFFER, gr->vbo[ gr->drawBuf ]);
+    gr->drawPtr = (GLfloat*) glMapBufferRange(GL_ARRAY_BUFFER, 0,
+                                              DRAW_BUF_SIZE, GL_MAP_WRITE_BIT);
+    return gr->drawPtr;
 }
 
 /*
@@ -636,9 +641,9 @@ void gpu_endDraw(void* res, float* attr)
 
     glUnmapBuffer(GL_ARRAY_BUFFER);
 
-    assert(gr->dptr);
-    dcount = attr - gr->dptr;
-    gr->dptr = NULL;
+    assert(gr->drawPtr);
+    dcount = attr - gr->drawPtr;
+    gr->drawPtr = NULL;
 
     if (dcount) {
         //dprint("gpu_endDraw %d\n", dcount);
@@ -648,10 +653,48 @@ void gpu_endDraw(void* res, float* attr)
         glBlendEquation(GL_FUNC_ADD);
 
         glUniformMatrix4fv(gr->slocTrans, 1, GL_FALSE, unitMatrix);
-        glBindVertexArray(gr->vao[ gr->dbuf ]);
+        glBindVertexArray(gr->vao[ gr->drawBuf ]);
         glDrawArrays(GL_TRIANGLES, 0, dcount / ATTR_COUNT);
 
-        gr->dbuf ^= 1;
+        gr->drawBuf ^= 1;
+    }
+}
+
+float* gpu_beginFx(void* res)
+{
+    OpenGLResources* gr = (OpenGLResources*) res;
+
+    gr->fxBuf ^= 1;
+
+    glBindBuffer(GL_ARRAY_BUFFER, gr->vbo[ gr->fxBuf ]);
+    gr->fxPtr = (GLfloat*) glMapBufferRange(GL_ARRAY_BUFFER, 0,
+                                            FX_BUF_SIZE, GL_MAP_WRITE_BIT);
+    return gr->fxPtr;
+}
+
+void gpu_endFx(void* res, float* attr)
+{
+    OpenGLResources* gr = (OpenGLResources*) res;
+    GLsizei dcount;     // Number of floats.
+
+    glUnmapBuffer(GL_ARRAY_BUFFER);
+
+    assert(gr->fxPtr);
+    dcount = attr - gr->fxPtr;
+    gr->fxPtr = NULL;
+
+    if (dcount) {
+        //dprint("gpu_endFx %d\n", dcount);
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glBlendEquation(GL_FUNC_ADD);
+
+        glUniformMatrix4fv(gr->slocTrans, 1, GL_FALSE, unitMatrix);
+        glBindVertexArray(gr->vao[ gr->fxBuf ]);
+        glDrawArrays(GL_TRIANGLES, 0, dcount / ATTR_COUNT);
+
+        gr->fxBuf ^= 1;
     }
 }
 
