@@ -1260,9 +1260,8 @@ void IntroController::updateSpeedMenu(MenuEvent &event) {
             xu4.settings->write();
 
             // re-initialize events
-            eventTimerGranularity = (1000 / xu4.settings->gameCyclesPerSecond);
-            xu4.eventHandler->getTimer()->reset(eventTimerGranularity);
-
+            xu4.eventHandler->setTimerInterval(1000 /
+                                        xu4.settings->gameCyclesPerSecond);
             break;
         case CANCEL:
             // discard settings
@@ -1541,7 +1540,7 @@ void IntroController::initTitles()
     title = titles.begin();
 
     // speed up the timer while the intro titles are displayed
-    xu4.eventHandler->getTimer()->reset(xu4.settings->titleSpeedOther);
+    xu4.eventHandler->setTimerInterval(xu4.settings->titleSpeedOther);
 }
 
 
@@ -2008,7 +2007,8 @@ bool IntroController::updateTitle()
         if (title == titles.end())
         {
             // reset the timer to the pre-titles granularity
-            xu4.eventHandler->getTimer()->reset(eventTimerGranularity);
+            xu4.eventHandler->setTimerInterval(1000 /
+                                        xu4.settings->gameCyclesPerSecond);
 
             // make sure the titles only appear when the app first loads
             bSkipTitles = true;
@@ -2020,15 +2020,15 @@ bool IntroController::updateTitle()
         {
             // assume this is "Ultima IV" and pre-load sound
 //            soundLoad(SOUND_TITLE_FADE);
-            xu4.eventHandler->getTimer()->reset(xu4.settings->titleSpeedRandom);
+            xu4.eventHandler->setTimerInterval(xu4.settings->titleSpeedRandom);
         }
         else if (title->method == MAP)
         {
-            xu4.eventHandler->getTimer()->reset(xu4.settings->titleSpeedOther);
+            xu4.eventHandler->setTimerInterval(xu4.settings->titleSpeedOther);
         }
         else
         {
-            xu4.eventHandler->getTimer()->reset(xu4.settings->titleSpeedOther);
+            xu4.eventHandler->setTimerInterval(xu4.settings->titleSpeedOther);
         }
     }
 

@@ -21,7 +21,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include "tileset.h"
 #include "u4.h"     // VIEWPORT_W
+
+extern uint32_t getTicks();
 
 //#include "gpu_opengl.h"
 
@@ -34,8 +37,8 @@ const char* cmap_vertShader =
     "#version 330\n"
     "uniform mat4 transform;\n"
     "layout(location = 0) in vec3 position;\n"
-    "layout(location = 1) in vec2 uv;\n"
-    "out vec2 texCoord;\n"
+    "layout(location = 1) in vec4 uv;\n"
+    "out vec4 texCoord;\n"
     "void main() {\n"
     "  texCoord = uv;\n"
     "  gl_Position = transform * vec4(position, 1.0);\n"
@@ -44,12 +47,68 @@ const char* cmap_vertShader =
 const char* cmap_fragShader =
     "#version 330\n"
     "uniform sampler2D cmap;\n"
+    "uniform sampler2D mmap;\n"
     "uniform vec4 tint;\n"
-    "in vec2 texCoord;\n"
+    "uniform vec2 scroll;\n"
+    "in vec4 texCoord;\n"
     "out vec4 fragColor;\n"
     "void main() {\n"
-    "  vec4 texel = texture(cmap, texCoord);\n"
+    "  vec4 texel;\n"
+    "  vec4 material = texture(mmap, texCoord.st);\n"
+    "  if (material.b > 0.95) {\n"
+    "    vec2 tc = texCoord.sq; \n"
+    "    float nv = texCoord.p - scroll.t * 0.3;\n"
+    "    tc.t += (nv - floor(nv)) * scroll.s;\n"
+    "    texel = texture(cmap, tc);\n"
+    "/*\n"
+    "    float nv = texCoord.p + scroll.t;\n"
+    "    texel = vec4(vec3(nv - floor(nv)), 1.0);\n"
+    "*/\n"
+    "  } else {\n"
+    "    texel = texture(cmap, texCoord.st);\n"
+    "  }\n"
     "  fragColor = tint * texel;\n"
+    "}\n";
+
+const char* world_vertShader =
+    "#version 330\n"
+    "uniform mat4 transform;\n"
+    "layout(location = 0) in vec3 position;\n"
+    "layout(location = 1) in vec4 uv;\n"
+    "out vec4 texCoord;\n"
+    "out vec2 shadowCoord;\n"
+    "void main() {\n"
+    "  texCoord = uv;\n"
+    "  gl_Position = transform * vec4(position, 1.0);\n"
+    "  shadowCoord = (gl_Position.xy + 1.0) * 0.5;\n"
+    "}\n";
+
+const char* world_fragShader =
+    "#version 330\n"
+    "uniform sampler2D cmap;\n"
+    "uniform sampler2D mmap;\n"
+    "uniform sampler2D shadowMap;\n"
+    "uniform vec2 scroll;\n"
+    "in vec4 texCoord;\n"
+    "in vec2 shadowCoord;\n"
+    "out vec4 fragColor;\n"
+    "void main() {\n"
+    "  vec4 texel;\n"
+    "  vec4 material = texture(mmap, texCoord.st);\n"
+    "  if (material.b > 0.95) {\n"
+    "    vec2 tc = texCoord.sq; \n"
+    "    float nv = texCoord.p - scroll.t * 0.3;\n"
+    "    tc.t += (nv - floor(nv)) * scroll.s;\n"
+    "    texel = texture(cmap, tc);\n"
+    "/*\n"
+    "    float nv = texCoord.p + scroll.t;\n"
+    "    texel = vec4(vec3(nv - floor(nv)), 1.0);\n"
+    "*/\n"
+    "  } else {\n"
+    "    texel = texture(cmap, texCoord.st);\n"
+    "  }\n"
+    "  vec4 shade = texture(shadowMap, shadowCoord);\n"
+    "  fragColor = vec4(shade.aaa, 1.0) * texel;\n"
     "}\n";
 
 #define MAT_X 12
@@ -61,20 +120,52 @@ static const float unitMatrix[16] = {
     0.0, 0.0, 0.0, 1.0
 };
 
-#define ATTR_COUNT      5
+#define ATTR_COUNT      7
 #define ATTR_STRIDE     (sizeof(float) * ATTR_COUNT)
 static const float quadAttr[] = {
-    // X   Y   Z       U  V
-   -1.0,-1.0, 0.0,   0.0, 1.0,
-    1.0,-1.0, 0.0,   1.0, 1.0,
-    1.0, 1.0, 0.0,   1.0, 0.0,
-    1.0, 1.0, 0.0,   1.0, 0.0,
-   -1.0, 1.0, 0.0,   0.0, 0.0,
-   -1.0,-1.0, 0.0,   0.0, 1.0
+    // X   Y   Z       U  V  vunit  scrollSourceV
+   -1.0,-1.0, 0.0,   0.0, 1.0, 0.0, 0.0,
+    1.0,-1.0, 0.0,   1.0, 1.0, 0.0, 0.0,
+    1.0, 1.0, 0.0,   1.0, 0.0, 0.0, 0.0,
+    1.0, 1.0, 0.0,   1.0, 0.0, 0.0, 0.0,
+   -1.0, 1.0, 0.0,   0.0, 0.0, 0.0, 0.0,
+   -1.0,-1.0, 0.0,   0.0, 1.0, 0.0, 0.0
 };
 
 #define DRAW_BUF_SIZE   (ATTR_STRIDE * 6 * 400)
+#define FX_BUF_SIZE     (ATTR_STRIDE * 6 * 100)
+#define SHADOW_DIM      512
 
+
+#ifdef _WIN32
+#include "glad.c"
+#endif
+
+//#define DEBUG_GL
+#ifdef DEBUG_GL
+void _debugGL( GLenum source, GLenum type, GLuint id, GLenum severity,
+               GLsizei length, const GLchar* message, const void* userParam )
+{
+    (void) severity;
+    (void) length;
+    (void) userParam;
+
+    fprintf(stderr, "GL DEBUG %d:%s 0x%x %s\n",
+            source,
+            (type == GL_DEBUG_TYPE_ERROR) ? " ERROR" : "",
+            id, message );
+}
+
+static void enableGLDebug()
+{
+    // Requires GL_KHR_debug extension
+    glEnable(GL_DEBUG_OUTPUT);
+    glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+    glDebugMessageControl(GL_DEBUG_SOURCE_API, GL_DONT_CARE,
+                          GL_DEBUG_SEVERITY_NOTIFICATION, 0, NULL, GL_FALSE);
+    glDebugMessageCallback(_debugGL, NULL);
+}
+#endif
 
 static void printInfoLog(GLuint obj, int prog)
 {
@@ -231,8 +322,26 @@ static void _defineAttributeLayout(GLuint vao, GLuint vbo)
     glEnableVertexAttribArray(LOC_POS);
     glVertexAttribPointer(LOC_POS, 3, GL_FLOAT, GL_FALSE, ATTR_STRIDE, 0);
     glEnableVertexAttribArray(LOC_UV);
-    glVertexAttribPointer(LOC_UV,  2, GL_FLOAT, GL_FALSE, ATTR_STRIDE,
+    glVertexAttribPointer(LOC_UV,  4, GL_FLOAT, GL_FALSE, ATTR_STRIDE,
                           (const GLvoid*) 12);
+}
+
+static GLuint _makeFramebuffer(GLuint texId)
+{
+    GLuint fbo;
+    GLenum status;
+
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, texId, 0);
+
+    status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        fprintf(stderr, "Framebuffer invalid: 0x%04X\n", status);
+        return 0;
+    }
+    return fbo;
 }
 
 extern Image* loadImage_png(U4FILE *file);
@@ -263,25 +372,47 @@ static U4FILE* openHQXTableImage(int scale)
 bool gpu_init(void* res, int w, int h, int scale)
 {
     OpenGLResources* gr = (OpenGLResources*) res;
+    GLuint sh;
+    GLint cmap, mmap;
 
     assert(sizeof(GLuint) == sizeof(uint32_t));
 
-    // Create screen texture.
-    glGenTextures(1, &gr->screenTex);
+    memset(gr, 0, sizeof(OpenGLResources));
+    /*
+    gr->scalerLut = 0;
+    gr->scaler = 0;
+    gr->blockCount = 0;
+    gr->tilesTex = 0;
+    */
+
+#ifdef DEBUG_GL
+    enableGLDebug();
+#endif
+
+    // Create screen & shadow textures.
+    glGenTextures(2, &gr->screenTex);
+
     glBindTexture(GL_TEXTURE_2D, gr->screenTex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 
-    gr->tilesTex = 0;
-    gr->scalerLut = 0;
-    gr->scaler = 0;
+    glBindTexture(GL_TEXTURE_2D, gr->shadowTex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, SHADOW_DIM, SHADOW_DIM,
+                 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+
+    gr->shadowFbo = _makeFramebuffer(gr->shadowTex);
+    if (! gr->shadowFbo)
+        return false;
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 
 
     // Set default state.
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_ALPHA_TEST);
-    glDisable(GL_BLEND);
     glDisable(GL_CULL_FACE);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glViewport(0, 0, w, h);
 
 
@@ -302,56 +433,84 @@ bool gpu_init(void* res, int w, int h, int scale)
         if (! gr->scalerLut)
             return false;
 
-        gr->scaler = glCreateProgram();
-        if (compileSLFile(gr->scaler, "hq2x.glsl", scale))
+        gr->scaler = sh = glCreateProgram();
+        if (compileSLFile(sh, "hq2x.glsl", scale))
             return false;
 
-        gr->slocScMat = glGetUniformLocation(gr->scaler, "MVPMatrix");
-        gr->slocScDim = glGetUniformLocation(gr->scaler, "TextureSize");
-        gr->slocScTex = glGetUniformLocation(gr->scaler, "Texture");
-        gr->slocScLut = glGetUniformLocation(gr->scaler, "LUT");
+        gr->slocScMat = glGetUniformLocation(sh, "MVPMatrix");
+        gr->slocScDim = glGetUniformLocation(sh, "TextureSize");
+        gr->slocScTex = glGetUniformLocation(sh, "Texture");
+        gr->slocScLut = glGetUniformLocation(sh, "LUT");
 
-        glUseProgram(gr->scaler);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, gr->screenTex);
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, gr->scalerLut);
-
+        glUseProgram(sh);
         glUniformMatrix4fv(gr->slocScMat, 1, GL_FALSE, unitMatrix);
         glUniform2f(gr->slocScDim, (float) (w / scale), (float) (h / scale));
-        glUniform1i(gr->slocScTex, 0);
-        glUniform1i(gr->slocScLut, 1);
+        glUniform1i(gr->slocScTex, GTU_CMAP);
+        glUniform1i(gr->slocScLut, GTU_SCALER_LUT);
     }
 
 
-    // Create colormap shader.
-    gr->shader = glCreateProgram();
-    if (compileShaders(gr->shader, cmap_vertShader, cmap_fragShader))
+    // Create shadowcast shader.
+    gr->shadow = sh = glCreateProgram();
+    if (compileSLFile(sh, "shadowcast.glsl", 0))
         return false;
 
-    gr->slocTrans = glGetUniformLocation(gr->shader, "transform");
-    gr->slocCmap  = glGetUniformLocation(gr->shader, "cmap");
-    gr->slocTint  = glGetUniformLocation(gr->shader, "tint");
+    gr->shadowTrans  = glGetUniformLocation(sh, "transform");
+    gr->shadowVport  = glGetUniformLocation(sh, "vport");
+    gr->shadowViewer = glGetUniformLocation(sh, "viewer");
+    gr->shadowCounts = glGetUniformLocation(sh, "shape_count");
+    gr->shadowShapes = glGetUniformLocation(sh, "shapes");
 
-    glUseProgram(gr->shader);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, gr->screenTex);
 
-    // Set default uniform values.
+    // Create colormap shader.
+    gr->shadeColor = sh = glCreateProgram();
+    if (compileShaders(sh, cmap_vertShader, cmap_fragShader))
+        return false;
+
+    gr->slocTrans   = glGetUniformLocation(sh, "transform");
+    cmap            = glGetUniformLocation(sh, "cmap");
+    mmap            = glGetUniformLocation(sh, "mmap");
+    gr->slocTint    = glGetUniformLocation(sh, "tint");
+    gr->slocScroll  = glGetUniformLocation(sh, "scroll");
+
+    glUseProgram(sh);
     glUniformMatrix4fv(gr->slocTrans, 1, GL_FALSE, unitMatrix);
-    glUniform1i(gr->slocCmap, 0);
+    glUniform1i(cmap, GTU_CMAP);
+    glUniform1i(mmap, GTU_MATERIAL);
     glUniform4f(gr->slocTint, 1.0, 1.0, 1.0, 1.0);
+
+
+    // Create world shader.
+    gr->shadeWorld = sh = glCreateProgram();
+    if (compileShaders(sh, world_vertShader, world_fragShader))
+        return false;
+
+    gr->worldTrans     = glGetUniformLocation(sh, "transform");
+    cmap               = glGetUniformLocation(sh, "cmap");
+    mmap               = glGetUniformLocation(sh, "mmap");
+    gr->worldShadowMap = glGetUniformLocation(sh, "shadowMap");
+    gr->worldScroll    = glGetUniformLocation(sh, "scroll");
+
+    glUseProgram(sh);
+    glUniformMatrix4fv(gr->worldTrans, 1, GL_FALSE, unitMatrix);
+    glUniform1i(cmap, GTU_CMAP);
+    glUniform1i(mmap, GTU_MATERIAL);
+    glUniform1i(gr->worldShadowMap, GTU_SHADOW);
 
 
     // Create our vertex buffers.
     glGenBuffers(GLOB_COUNT, gr->vbo);
 
-    // Reserve space in the double-buffered draw list.
+    // Reserve space in the double-buffered draw lists.
     for(int i = GLOB_DRAW_LIST0; i < GLOB_DRAW_LIST0+2; ++i) {
         glBindBuffer(GL_ARRAY_BUFFER, gr->vbo[i]);
         glBufferData(GL_ARRAY_BUFFER, DRAW_BUF_SIZE, NULL, GL_DYNAMIC_DRAW);
     }
-    gr->dbuf = 0;
+    for(int i = GLOB_FX_LIST0; i < GLOB_FX_LIST0+2; ++i) {
+        glBindBuffer(GL_ARRAY_BUFFER, gr->vbo[i]);
+        glBufferData(GL_ARRAY_BUFFER, FX_BUF_SIZE, NULL, GL_DYNAMIC_DRAW);
+    }
+    gr->drawBuf = gr->fxBuf = 0;
 
     // Create quad geometry.
     glBindBuffer(GL_ARRAY_BUFFER, gr->vbo[GLOB_QUAD]);
@@ -377,8 +536,11 @@ void gpu_free(void* res)
 
     glDeleteVertexArrays(GLOB_COUNT, gr->vao);
     glDeleteBuffers(GLOB_COUNT, gr->vbo);
-    glDeleteProgram(gr->shader);
-    glDeleteTextures(1, &gr->screenTex);
+    glDeleteProgram(gr->shadeColor);
+    glDeleteProgram(gr->shadeWorld);
+    glDeleteProgram(gr->shadow);
+    glDeleteFramebuffers(1, &gr->shadowFbo);
+    glDeleteTextures(2, &gr->screenTex);
 }
 
 void gpu_viewport(int x, int y, int w, int h)
@@ -410,10 +572,12 @@ void gpu_freeTexture(uint32_t tex)
     glDeleteTextures(1, &tex);
 }
 
-void gpu_setTilesTexture(void* res, uint32_t tex)
+void gpu_setTilesTexture(void* res, uint32_t tex, uint32_t mat, float vDim)
 {
     OpenGLResources* gr = (OpenGLResources*) res;
     gr->tilesTex = tex;
+    gr->tilesMat = mat;
+    gr->tilesVDim = vDim;
 }
 
 /*
@@ -425,21 +589,23 @@ void gpu_background(void* res, const float* color, const Image32* img)
     OpenGLResources* gr = (OpenGLResources*) res;
 
     if (img) {
+        glActiveTexture(GL_TEXTURE0 + GTU_CMAP);
         glBindTexture(GL_TEXTURE_2D, gr->screenTex);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, img->w, img->h,
                      0, GL_RGBA, GL_UNSIGNED_BYTE, img->pixels);
 
         if (gr->scaler) {
             glUseProgram(gr->scaler);
+            glActiveTexture(GL_TEXTURE0 + GTU_SCALER_LUT);
+            glBindTexture(GL_TEXTURE_2D, gr->scalerLut);
         } else {
+            glUseProgram(gr->shadeColor);
             glUniformMatrix4fv(gr->slocTrans, 1, GL_FALSE, unitMatrix);
         }
 
+        glDisable(GL_BLEND);
         glBindVertexArray(gr->vao[ GLOB_QUAD ]);
         glDrawArrays(GL_TRIANGLES, 0, 6);
-
-        if (gr->scaler)
-            glUseProgram(gr->shader);
     }
     else if (color) {
         glClearColor(color[0], color[1], color[2], color[3]);
@@ -458,10 +624,10 @@ float* gpu_beginDraw(void* res)
 {
     OpenGLResources* gr = (OpenGLResources*) res;
 
-    glBindBuffer(GL_ARRAY_BUFFER, gr->vbo[ gr->dbuf ]);
-    gr->dptr = (GLfloat*) glMapBufferRange(GL_ARRAY_BUFFER, 0, DRAW_BUF_SIZE,
-                                           GL_MAP_WRITE_BIT);
-    return gr->dptr;
+    glBindBuffer(GL_ARRAY_BUFFER, gr->vbo[ gr->drawBuf ]);
+    gr->drawPtr = (GLfloat*) glMapBufferRange(GL_ARRAY_BUFFER, 0,
+                                              DRAW_BUF_SIZE, GL_MAP_WRITE_BIT);
+    return gr->drawPtr;
 }
 
 /*
@@ -475,24 +641,60 @@ void gpu_endDraw(void* res, float* attr)
 
     glUnmapBuffer(GL_ARRAY_BUFFER);
 
-    assert(gr->dptr);
-    dcount = attr - gr->dptr;
-    gr->dptr = NULL;
+    assert(gr->drawPtr);
+    dcount = attr - gr->drawPtr;
+    gr->drawPtr = NULL;
 
     if (dcount) {
         //dprint("gpu_endDraw %d\n", dcount);
 
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glBlendEquation(GL_FUNC_ADD);
 
         glUniformMatrix4fv(gr->slocTrans, 1, GL_FALSE, unitMatrix);
-        glBindTexture(GL_TEXTURE_2D, gr->tilesTex);
-        glBindVertexArray(gr->vao[ gr->dbuf ]);
+        glBindVertexArray(gr->vao[ gr->drawBuf ]);
         glDrawArrays(GL_TRIANGLES, 0, dcount / ATTR_COUNT);
 
-        glDisable(GL_BLEND);
+        gr->drawBuf ^= 1;
+    }
+}
 
-        gr->dbuf ^= 1;
+float* gpu_beginFx(void* res)
+{
+    OpenGLResources* gr = (OpenGLResources*) res;
+
+    gr->fxBuf ^= 1;
+
+    glBindBuffer(GL_ARRAY_BUFFER, gr->vbo[ gr->fxBuf ]);
+    gr->fxPtr = (GLfloat*) glMapBufferRange(GL_ARRAY_BUFFER, 0,
+                                            FX_BUF_SIZE, GL_MAP_WRITE_BIT);
+    return gr->fxPtr;
+}
+
+void gpu_endFx(void* res, float* attr)
+{
+    OpenGLResources* gr = (OpenGLResources*) res;
+    GLsizei dcount;     // Number of floats.
+
+    glUnmapBuffer(GL_ARRAY_BUFFER);
+
+    assert(gr->fxPtr);
+    dcount = attr - gr->fxPtr;
+    gr->fxPtr = NULL;
+
+    if (dcount) {
+        //dprint("gpu_endFx %d\n", dcount);
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glBlendEquation(GL_FUNC_ADD);
+
+        glUniformMatrix4fv(gr->slocTrans, 1, GL_FALSE, unitMatrix);
+        glBindVertexArray(gr->vao[ gr->fxBuf ]);
+        glDrawArrays(GL_TRIANGLES, 0, dcount / ATTR_COUNT);
+
+        gr->fxBuf ^= 1;
     }
 }
 
@@ -517,44 +719,80 @@ float* gpu_emitQuad(float* attr, const float* drawRect, const float* uvRect)
             uvRect[0], uvRect[1], uvRect[2], uvRect[3]);
 #endif
 
+#define EMIT_POS(x,y) \
+    *attr++ = x; \
+    *attr++ = y; \
+    *attr++ = 0.0f
+
+#define EMIT_UV(u,v) \
+    *attr++ = u; \
+    *attr++ = v; \
+    *attr++ = 0.0f; \
+    *attr++ = 0.0f
+
     // NOTE: We only do writes to attr here (avoid memcpy).
 
     // First vertex, lower-left corner
-    *attr++ = drawRect[0];
-    *attr++ = drawRect[1];
-    *attr++ = 0.0f;
-    *attr++ = uvRect[0];
-    *attr++ = uvRect[3];
+    EMIT_POS(drawRect[0], drawRect[1]);
+    EMIT_UV(uvRect[0], uvRect[3]);
 
     // Lower-right corner
-    *attr++ = drawRect[0] + w;
-    *attr++ = drawRect[1];
-    *attr++ = 0.0f;
-    *attr++ = uvRect[2];
-    *attr++ = uvRect[3];
+    EMIT_POS(drawRect[0] + w, drawRect[1]);
+    EMIT_UV(uvRect[2], uvRect[3]);
 
     // Top-right corner
     for (i = 0; i < 2; ++i) {
-        *attr++ = drawRect[0] + w;
-        *attr++ = drawRect[1] + h;
-        *attr++ = 0.0f;
-        *attr++ = uvRect[2];
-        *attr++ = uvRect[1];
+        EMIT_POS(drawRect[0] + w, drawRect[1] + h);
+        EMIT_UV(uvRect[2], uvRect[1]);
     }
 
     // Top-left corner
-    *attr++ = drawRect[0];
-    *attr++ = drawRect[1] + h;
-    *attr++ = 0.0f;
-    *attr++ = uvRect[0];
-    *attr++ = uvRect[1];
+    EMIT_POS(drawRect[0], drawRect[1] + h);
+    EMIT_UV(uvRect[0], uvRect[1]);
 
     // Repeat first vertex
-    *attr++ = drawRect[0];
-    *attr++ = drawRect[1];
-    *attr++ = 0.0f;
-    *attr++ = uvRect[0];
-    *attr++ = uvRect[3];
+    EMIT_POS(drawRect[0], drawRect[1]);
+    EMIT_UV(uvRect[0], uvRect[3]);
+
+    return attr;
+}
+
+float* gpu_emitQuadScroll(float* attr, const float* drawRect,
+                          const float* uvRect, float scrollSourceV)
+{
+    float w = drawRect[2];
+    float h = drawRect[3];
+    int i;
+
+#define EMIT_UVS(u,v,vunit) \
+    *attr++ = u; \
+    *attr++ = v; \
+    *attr++ = vunit; \
+    *attr++ = scrollSourceV
+
+    // NOTE: We only do writes to attr here (avoid memcpy).
+
+    // First vertex, lower-left corner
+    EMIT_POS(drawRect[0], drawRect[1]);
+    EMIT_UVS(uvRect[0], uvRect[3], 1.0f);
+
+    // Lower-right corner
+    EMIT_POS(drawRect[0] + w, drawRect[1]);
+    EMIT_UVS(uvRect[2], uvRect[3], 1.0f);
+
+    // Top-right corner
+    for (i = 0; i < 2; ++i) {
+        EMIT_POS(drawRect[0] + w, drawRect[1] + h);
+        EMIT_UVS(uvRect[2], uvRect[1], 0.0f);
+    }
+
+    // Top-left corner
+    EMIT_POS(drawRect[0], drawRect[1] + h);
+    EMIT_UVS(uvRect[0], uvRect[1], 0.0f);
+
+    // Repeat first vertex
+    EMIT_POS(drawRect[0], drawRect[1]);
+    EMIT_UVS(uvRect[0], uvRect[3], 1.0f);
 
     return attr;
 }
@@ -562,8 +800,13 @@ float* gpu_emitQuad(float* attr, const float* drawRect, const float* uvRect)
 //--------------------------------------
 // Map Rendering
 
-static void _initMapChunks(OpenGLResources* gr, const Map* map)
+void gpu_resetMap(void* res, const Map* map)
 {
+    OpenGLResources* gr = (OpenGLResources*) res;
+
+    gr->blockCount = 0;
+
+    // Initialize map chunks.
     assert(map->chunk_height == map->chunk_width);
     gr->mapChunkDim = map->chunk_width;
     gr->mapChunkVertCount = gr->mapChunkDim * gr->mapChunkDim * 6;
@@ -573,19 +816,30 @@ static void _initMapChunks(OpenGLResources* gr, const Map* map)
         glBufferData(GL_ARRAY_BUFFER, gr->mapChunkVertCount * ATTR_STRIDE,
                      NULL, GL_DYNAMIC_DRAW);
     }
-    memset(gr->mapChunkLoc, 0xff, 4*sizeof(uint16_t));
+
+    // Clear chunk cache.
+    memset(gr->mapChunkId, 0xff, 4*sizeof(uint16_t));
 }
 
 #define VIEW_TILE_SIZE  (2.0f / VIEWPORT_W)
 
-static void _buildChunkGeo(GLuint vbo, const uint8_t* chunk, int dim,
-                           const float* uvTable )
+/*
+ * \param chunk    Map data aligned at top-left of chunk.
+ * \param dim      Chunk tile dimensions
+ * \param stride   Chunk stride (map tile width)
+ */
+static void _buildChunkGeo(GLuint vbo, const TileId* chunk, int dim,
+                           int stride, const TileRenderData* renderData,
+                           const float* uvTable)
 {
     float drawRect[4];  // x, y, width, height
+    const float* uvCur;
+    const float* uvScroll;
     float* attr;
+    const TileId* ip;
+    const TileRenderData* tr;
     float startX;
     int x, y;
-    int c;
     int vcount = dim * dim * 6;
 
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
@@ -604,33 +858,50 @@ static void _buildChunkGeo(GLuint vbo, const uint8_t* chunk, int dim,
 
     for (y = 0; y < dim; ++y) {
         drawRect[0] = startX;
+        ip = chunk;
         for (x = 0; x < dim; ++x) {
-            c = *chunk++;
-            attr = gpu_emitQuad(attr, drawRect, uvTable + c*4);
+            tr = renderData + *ip++;
+            uvCur = uvTable + tr->vid*4;
+            if (tr->scroll != VID_UNSET) {
+                uvScroll = uvTable + tr->scroll*4;
+                attr = gpu_emitQuadScroll(attr, drawRect, uvCur, uvScroll[1]);
+            } else
+                attr = gpu_emitQuad(attr, drawRect, uvCur);
             drawRect[0] += drawRect[2];
         }
         drawRect[1] -= drawRect[3];
+        chunk += stride;
     }
 
     glUnmapBuffer(GL_ARRAY_BUFFER);
 }
 
+struct ChunkLoc {
+    int16_t x, y;
+};
+
 struct ChunkInfo {
-    const uint8_t* chunks;
+    const TileId* mapData;
+    const TileRenderData* renderData;
     const float* uvs;
     const GLuint* vbo;
-    uint16_t* mapChunkLoc;
+    uint16_t* mapChunkId;
+    ChunkLoc* chunkLoc;
     int mapW;
     int mapH;
     int cdim;
-    int clen;
-    int chunksAcross;
     int geoUsedMask;
 };
 
-#define WRAP(x,w) \
-    if (x < 0) x += w; \
-    else if (x >= w) x -= w;
+#define WRAP(x,loc,limit) \
+    if (x < 0) { \
+        x += limit; \
+        loc = -limit; \
+    } else if (x >= limit) { \
+        x -= limit; \
+        loc = limit; \
+    } else \
+        loc = 0;
 
 // LIMIT: Maximum of 256x256 chunks.
 #define CHUNK_ID(c,r)       (c<<8 | r)
@@ -649,10 +920,12 @@ static int _obtainChunkGeo(ChunkInfo* ci, int x, int y, int bumpPass)
 {
     int i;
     int ccol, crow;
+    int wx, wy;
     uint16_t chunkId;
+    ChunkLoc* loc;
 
-    WRAP(x, ci->mapW);
-    WRAP(y, ci->mapH);
+    WRAP(x, wx, ci->mapW);
+    WRAP(y, wy, ci->mapH);
     ccol = x / ci->cdim;
     crow = y / ci->cdim;
     chunkId = CHUNK_ID(ccol, crow);
@@ -673,13 +946,13 @@ static int _obtainChunkGeo(ChunkInfo* ci, int x, int y, int bumpPass)
     {
         // Check if already made.
         for (i = 0; i < CHUNK_CACHE_SIZE; ++i) {
-            if (ci->mapChunkLoc[i] == chunkId)
+            if (ci->mapChunkId[i] == chunkId)
                 goto used;
         }
 
         // Find unused VBO.
         for (i = 0; i < CHUNK_CACHE_SIZE; ++i) {
-            if (ci->mapChunkLoc[i] == 0xffff)
+            if (ci->mapChunkId[i] == 0xffff)
                 goto build;
         }
 
@@ -688,11 +961,14 @@ static int _obtainChunkGeo(ChunkInfo* ci, int x, int y, int bumpPass)
     }
 
 build:
-    ci->mapChunkLoc[i] = chunkId;
+    ci->mapChunkId[i] = chunkId;
     _buildChunkGeo(ci->vbo[i],
-                   ci->chunks + ci->clen * (crow * ci->chunksAcross + ccol),
-                   ci->cdim, ci->uvs);
+                   ci->mapData + (crow * ci->mapW + ccol) * ci->cdim,
+                   ci->cdim, ci->mapW, ci->renderData, ci->uvs);
 used:
+    loc = ci->chunkLoc + i;
+    loc->x = wx + (ccol * ci->cdim);
+    loc->y = wy + (crow * ci->cdim);
     ci->geoUsedMask |= 1 << i;
     return i;
 }
@@ -700,33 +976,66 @@ used:
 /*
  * \param map           Pointer to map.
  * \param tileUVs       Table of four floats (minU,minV,maxU,maxV) per tile.
+ * \param blocks        Sets the occluder shapes for shadowcasting.
+ *                      Pass NULL to reuse any previously set shapes.
  * \param cx            Map tile row to center view on.
  * \param cy            Map tile column to center view on.
  * \param viewRadius    Number of tiles (horiz & vert) to draw around cx,cy.
  */
 void gpu_drawMap(void* res, const Map* map, const float* tileUVs,
+                 const BlockingGroups* blocks,
                  int cx, int cy, int viewRadius)
 {
     OpenGLResources* gr = (OpenGLResources*) res;
+    ChunkLoc cloc[4];   // Tile location of chunks on the map.
     int i, usedMask;
 
-    if (gr->mapChunkDim != map->chunk_width)
-        _initMapChunks(gr, map);
+#if 1
+    // Render shadows.
+    if (blocks)
+        gr->blockCount = blocks->left + blocks->center + blocks->right;
+
+    if (gr->blockCount) {
+        GLint vp[4];
+        glGetIntegerv(GL_VIEWPORT, vp);
+
+        glUseProgram(gr->shadow);
+
+        if (blocks) {
+            glUniformMatrix4fv(gr->shadowTrans, 1, GL_FALSE, unitMatrix);
+            glUniform4f(gr->shadowVport, 0.0f, 0.0f, SHADOW_DIM, SHADOW_DIM);
+            glUniform3f(gr->shadowViewer, 0.0f, 0.0f, 11.0f);
+            glUniform3i(gr->shadowCounts, blocks->left, blocks->center,
+                                          blocks->right);
+            glUniform3fv(gr->shadowShapes, gr->blockCount, blocks->tilePos);
+        }
+
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gr->shadowFbo);
+        glViewport(0, 0, SHADOW_DIM, SHADOW_DIM);
+
+        glDisable(GL_BLEND);
+        glBindVertexArray(gr->vao[ GLOB_QUAD ]);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        glViewport(vp[0], vp[1], vp[2], vp[3]);
+    }
+#endif
 
     {
     ChunkInfo ci;
     int bindex[4];  // Chunk vertex buffer index (0-3) at view corner.
     int left, top, right, bot;
 
-    ci.chunks = map->chunks;
+    ci.mapData = map->data;
+    ci.renderData = map->tileset->render;
     ci.uvs    = tileUVs;
     ci.vbo    = gr->vbo + GLOB_MAP_CHUNK0;
-    ci.mapChunkLoc = gr->mapChunkLoc;
+    ci.mapChunkId = gr->mapChunkId;
+    ci.chunkLoc = cloc;
     ci.mapW   = map->width;
     ci.mapH   = map->height;
     ci.cdim   = gr->mapChunkDim;
-    ci.clen   = ci.cdim * ci.cdim;
-    ci.chunksAcross = map->width / ci.cdim;
     ci.geoUsedMask  = 0;
 
     left  = cx - viewRadius;
@@ -755,20 +1064,32 @@ void gpu_drawMap(void* res, const Map* map, const float* tileUVs,
 
     {
     float matrix[16];
-    int wx, wy;         // Tile location of chunk on the map.
-    uint16_t chunkId;
 
+    gr->time = ((float) getTicks()) * 0.001;
     memcpy(matrix, unitMatrix, sizeof(matrix));
 
+    if (gr->blockCount) {
+        glUseProgram(gr->shadeWorld);
+        glUniform2f(gr->worldScroll, gr->tilesVDim, gr->time);
+        glActiveTexture(GL_TEXTURE0 + GTU_SHADOW);
+        glBindTexture(GL_TEXTURE_2D, gr->shadowTex);
+    } else {
+        glUseProgram(gr->shadeColor);
+        glUniform2f(gr->slocScroll, gr->tilesVDim, gr->time);
+    }
+
+    glActiveTexture(GL_TEXTURE0 + GTU_CMAP);
     glBindTexture(GL_TEXTURE_2D, gr->tilesTex);
+    glActiveTexture(GL_TEXTURE0 + GTU_MATERIAL);
+    glBindTexture(GL_TEXTURE_2D, gr->tilesMat);
+
+    glDisable(GL_BLEND);
+
     for (i = 0; i < 4; ++i) {
         if (usedMask & (1 << i)) {
             // Position chunk in viewport.
-            chunkId = gr->mapChunkLoc[i];
-            wx = (chunkId >> 8)  * gr->mapChunkDim;
-            wy = (chunkId & 255) * gr->mapChunkDim;
-            matrix[ MAT_X ] = (float) (wx - cx) * VIEW_TILE_SIZE;
-            matrix[ MAT_Y ] = (float) (cy - wy) * VIEW_TILE_SIZE;
+            matrix[ MAT_X ] = (float) (cloc[i].x - cx) * VIEW_TILE_SIZE;
+            matrix[ MAT_Y ] = (float) (cy - cloc[i].y) * VIEW_TILE_SIZE;
             glUniformMatrix4fv(gr->slocTrans, 1, GL_FALSE, matrix);
 
             glBindVertexArray(gr->vao[ GLOB_MAP_CHUNK0 + i ]);

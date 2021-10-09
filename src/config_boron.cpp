@@ -274,7 +274,7 @@ static int conf_tileRule(TileRule* rule, UBlockIt& bi)
     return 1;
 }
 
-static Tile* conf_tile(ConfigBoron* cfg, int id, UBlockIt& bi)
+static Tile* conf_tile(ConfigBoron* cfg, Tile* tile, int id, UBlockIt& bi)
 {
     static const uint8_t tparam[6] = {
         // name   rule   image   animation   directions   numA
@@ -283,7 +283,8 @@ static Tile* conf_tile(ConfigBoron* cfg, int id, UBlockIt& bi)
     if (! validParam(bi, sizeof(tparam), tparam))
         return NULL;
 
-    Tile* tile = new Tile(id);
+    tile->id = id;
+    tile->scale = 1;
     tile->name = ur_atom(bi.it);
 
     const UCell* cell = bi.it+1;
@@ -437,7 +438,7 @@ Portal* conf_makePortal(ConfigBoron* cfg, UBlockIt& bi)
     portal->portalConditionsMet = NULL;
     portal->retroActiveDest = NULL;
 
-    portal->coords = MapCoords(numA[0], numA[1], numA[2]);
+    portal->coords = Coords(numA[0], numA[1], numA[2]);
     portal->start.x = numA[3];
     portal->start.y = numA[4];
     portal->start.z = numA[5];
@@ -467,9 +468,9 @@ Portal* conf_makePortal(ConfigBoron* cfg, UBlockIt& bi)
     const UCell* rad = bi.it + 4;
     if (ur_is(rad, UT_COORD)) {
         portal->retroActiveDest = new PortalDestination;
-        portal->retroActiveDest->coords = MapCoords(rad->coord.n[0],
-                                                    rad->coord.n[1],
-                                                    rad->coord.n[2]);
+        portal->retroActiveDest->coords = Coords(rad->coord.n[0],
+                                                 rad->coord.n[1],
+                                                 rad->coord.n[2]);
         portal->retroActiveDest->mapid = (MapId) rad->coord.n[3];
     }
 
@@ -492,14 +493,14 @@ static void conf_createMoongate(ConfigBoron* cfg, const UCell* coordC) {
     coords.y = coordC->coord.n[2];
 }
 
-static std::pair<Symbol, MapCoords> conf_initLabel(const UCell* it)
+static std::pair<Symbol, Coords> conf_initLabel(const UCell* it)
 {
     assert(ur_is(it, UT_WORD));
     assert(ur_is(it+1, UT_COORD));
     assert(it[1].coord.len == 3);
 
     const int16_t* pos = it[1].coord.n;
-    return std::pair<Symbol, MapCoords> (ur_atom(it), MapCoords(pos[0], pos[1], pos[2]));
+    return std::pair<Symbol, Coords> (ur_atom(it), Coords(pos[0], pos[1], pos[2]));
 }
 
 static Map* conf_makeMap(ConfigBoron* cfg, Tileset* tiles, UBlockIt& bi)
@@ -977,19 +978,18 @@ fail:
 
     // tileset (requires tileRules)
     if (blockIt(&bi, CI_TILESET)) {
-        Tile* tile;
-        int frameCount = 0;
-        int moduleId = 0;
-        Tileset* ts = xcd.tileset = new Tileset;
+        int moduleId;
+        int tileCount = (bi.end - bi.it) / 6;
+        Tileset* ts = xcd.tileset = new Tileset(tileCount);
+        Tile* tile = ts->tiles;
 
-        while ((tile = conf_tile(this, moduleId++, bi))) {
-            /* add the tile to our tileset */
-            ts->tiles.push_back(tile);
-            ts->nameMap[tile->name] = tile;
-
-            frameCount += tile->getFrames();
+        for (moduleId = 0; moduleId < tileCount; ++moduleId) {
+            if (! conf_tile(this, tile, moduleId, bi))
+                break;
+            ts->nameMap[tile->name] = tile;     // Add tile to nameMap
+            ++tile;
         }
-        ts->totalFrames = frameCount;
+        ts->tileCount = moduleId;
     }
 
     // u4-save-ids
@@ -1298,7 +1298,7 @@ Map* Config::map(uint32_t id) {
 
     Map* rmap = CB->mapList[id];
     /* if the map hasn't been loaded yet, load it! */
-    if (! rmap->data.size()) {
+    if (! rmap->data) {
         if (! loadMap(rmap, NULL))
             errorFatal("loadMap failed to read \"%s\" (type %d)",
                        confString(rmap->fname), rmap->type);
@@ -1312,7 +1312,7 @@ Map* Config::restoreMap(uint32_t id) {
         return NULL;
 
     Map* rmap = CB->mapList[id];
-    if (! rmap->data.size()) {
+    if (! rmap->data) {
         FILE* sav = NULL;
         bool ok;
 
@@ -1339,50 +1339,49 @@ const Coords* Config::moongateCoords(int phase) const {
 //--------------------------------------
 // Graphics config
 
-static ImageInfo* loadImageAtlas(const ConfigBoron* cfg, UBlockIt& bi) {
+int Config::atlasImages(StringId spec, AtlasSubImage* images, int max) {
+    UCell cell;
+    UBlockIt bi;
+    int count = 0;
+
+    // Spec is actually a block! not a string!.
+    ur_setId(&cell, UT_BLOCK);
+    ur_setSeries(&cell, spec, 0);
+
+    ur_blockIt(CX->ut, &bi, &cell);
+    ur_foreach (bi) {
+        if (ur_is(bi.it, UT_WORD) && ur_is(bi.it+1, UT_COORD)) {
+            images->name = ur_atom(bi.it);
+            ++bi.it;
+            images->x = bi.it->coord.n[0];
+            images->y = bi.it->coord.n[1];
+            ++images;
+            if (++count >= max)
+                break;
+        }
+    }
+    return count;
+}
+
+static ImageInfo* loadImageInfo(const ConfigBoron* cfg, UBlockIt& bi) {
     static const uint8_t atlasParam[4] = {
         // name  'atlas   numA      spec
         UT_WORD, UT_WORD, UT_COORD, UT_BLOCK
     };
-    if (! validParam(bi, sizeof(atlasParam), atlasParam))
-        return NULL;
-
-    ImageInfo* info = new ImageInfo;
-    info->name     = ur_atom(bi.it);
-    info->filename = UR_INVALID_BUF;
-    info->resGroup = 0;
-    info->width    = numA[0];
-    info->height   = numA[1];
-    info->subImageCount = 0;
-    info->depth    = 0;
-    info->prescale = 0;
-    info->filetype = FTYPE_UNKNOWN;
-    info->tiles    = 0;
-    info->transparentIndex = -1;
-    info->fixup    = FIXUP_NONE;
-    info->image    = NULL;
-    info->subImages = NULL;
-
-    //info->subImages = subimage = new SubImage[info->subImageCount];
-
-    UBlockIt si;
-    ur_blockIt(cfg->ut, &si, bi.it+3);
-    ur_foreach(si) {
-    }
-
-    return info;
-}
-
-static ImageInfo* loadImageInfo(const ConfigBoron* cfg, UBlockIt& bi) {
     static const uint8_t imageParam[4] = {
         // name  filename   numA      numB
         UT_WORD, UT_STRING, UT_COORD, UT_COORD
     };
-    if (! validParam(bi, sizeof(imageParam), imageParam))
-        errorFatal("Invalid image parameters");
+    int isAtlas = 0;
 
-    const int16_t* numA = bi.it[2].coord.n;     // width height depth
-    const int16_t* numB = bi.it[3].coord.n;     // filetype tiles fixup
+    if (! validParam(bi, sizeof(imageParam), imageParam)) {
+        if (validParam(bi, sizeof(atlasParam), atlasParam))
+            isAtlas = 1;
+        else
+            errorFatal("Invalid image parameters");
+    }
+
+    const int16_t* numA = bi.it[2].coord.n;     // width height (depth)
 
 #if 0
     UThread* ut = cfg->ut;
@@ -1393,20 +1392,35 @@ static ImageInfo* loadImageInfo(const ConfigBoron* cfg, UBlockIt& bi) {
 
     ImageInfo* info = new ImageInfo;
     info->name     = ur_atom(bi.it);
-    info->filename = ASTR(bi.it[1].series.buf);
     info->resGroup = 0;
     info->width    = numA[0];
     info->height   = numA[1];
     info->subImageCount = 0;
-    info->depth    = numA[2];
     info->prescale = 0;
-    info->filetype = numB[0];
-    info->tiles    = numB[1];
     info->transparentIndex = -1;
-    info->fixup    = numB[2];
     info->image    = NULL;
     info->subImages = NULL;
 
+    if (isAtlas) {
+        // An atlas ImageInfo is denoted by filetype FTYPE_ATLAS.
+        // The filename is the spec. block UIndex, not a string!
+
+        info->filename = bi.it[3].series.buf;
+        info->depth    = 0;
+        info->filetype = FTYPE_ATLAS;
+        info->tiles    = 0;
+        info->fixup    = FIXUP_NONE;
+    } else {
+        const int16_t* numB = bi.it[3].coord.n;     // filetype tiles fixup
+
+        info->filename = ASTR(bi.it[1].series.buf);
+        info->depth    = numA[2];
+        info->filetype = numB[0];
+        info->tiles    = numB[1];
+        info->fixup    = numB[2];
+    }
+
+    assert(sizeof(atlasParam) == sizeof(imageParam));
     bi.it += sizeof(imageParam);
 
     // Optional subimages block!
@@ -1439,9 +1453,11 @@ static ImageInfo* loadImageInfo(const ConfigBoron* cfg, UBlockIt& bi) {
 #ifdef USE_GL
             subimage->celCount = celCount;
 #endif
+#ifndef GPU_RENDER
             // Animated tiles denoted by height. TODO: Eliminate this.
             if (celCount > 1)
                 subimage->height *= celCount;
+#endif
 
             ++subimage;
         }
@@ -1466,9 +1482,7 @@ static ImageSet* loadImageSet(const ConfigBoron* cfg, UBlockIt& bi) {
     UBlockIt sit;
     ur_blockIt(cfg->ut, &sit, bi.it+2);
     while (sit.it != sit.end) {
-        ImageInfo* info = loadImageAtlas(cfg, sit);
-        if (! info)
-            info = loadImageInfo(cfg, sit);
+        ImageInfo *info = loadImageInfo(cfg, sit);
         dup = set->info.find(info->name);
         if (dup != set->info.end()) {
             delete dup->second;

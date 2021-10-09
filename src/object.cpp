@@ -12,7 +12,8 @@
 
 Object::~Object() {
 #ifdef GPU_RENDER
-    if (animId != ANIM_UNUSED)
+    // Must check if exiting game as the eventHandler may already be deleted.
+    if (animId != ANIM_UNUSED && xu4.stage != StageExitGame)
         anim_setState(&xu4.eventHandler->flourishAnim, animId, ANIM_FREE);
 #endif
 }
@@ -38,12 +39,6 @@ void Object::placeOnMap(Map* map, const Coords& coords) {
             animId = tileDef->startFrameAnim();
     }
 #endif
-}
-
-Map *Object::getMap() {
-    if (maps.empty())
-        return NULL;
-    return maps.back();
 }
 
 /*

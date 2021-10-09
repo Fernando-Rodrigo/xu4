@@ -15,20 +15,13 @@
 #include "types.h"
 #include "u4file.h"
 
-#define MAP_IS_OOB(mapptr, c) (((c).x) < 0 || ((c).x) >= (static_cast<int>((mapptr)->width)) || ((c).y) < 0 || ((c).y) >= (static_cast<int>((mapptr)->height)) || ((c).z) < 0 || ((c).z) >= (static_cast<int>((mapptr)->levels)))
-
 class AnnotationMgr;
-class Map;
 class Object;
-class Person;
 class Creature;
 class Tileset;
 struct Portal;
-struct _Dungeon;
 
 typedef std::vector<Portal *> PortalList;
-//typedef std::list<int> CompressedChunkList;
-typedef std::vector<TileId> MapData;
 
 /* flags */
 #define SHOW_AVATAR (1 << 0)
@@ -40,30 +33,10 @@ typedef std::vector<TileId> MapData;
 #define WITH_GROUND_OBJECTS 1
 #define WITH_OBJECTS        2
 
-/**
- * MapCoords class
- */
-class MapCoords : public Coords {
-public:
-    MapCoords(int initx = 0, int inity = 0, int initz = 0) : Coords(initx, inity, initz) {}
-    MapCoords(const Coords &a) : Coords(a.x, a.y, a.z) {}
-
-    MapCoords &operator=(const Coords &a) { x = a.x; y = a.y; z = a.z; return *this; }
-    bool operator==(const MapCoords &a) const;
-    bool operator!=(const MapCoords &a) const;
-    bool operator<(const MapCoords &a)  const;
-
-    MapCoords &wrap(const class Map *map);
-    MapCoords &putInBounds(const class Map *map);
-    MapCoords &move(Direction d, const class Map *map = NULL);
-    MapCoords &move(int dx, int dy, const class Map *map = NULL);
-    int getRelativeDirection(const MapCoords &c, const class Map *map = NULL) const;
-    Direction pathTo(const MapCoords &c, int valid_dirs = MASK_DIR_ALL, bool towards = true, const class Map *map = NULL) const;
-    Direction pathAway(const MapCoords &c, int valid_dirs = MASK_DIR_ALL) const;
-    int movementDistance(const MapCoords &c, const class Map *map = NULL) const;
-    int distance(const MapCoords &c, const class Map *map = NULL) const;
-
-    static MapCoords nowhere;
+#define BLOCKING_POS_SIZE   128*3
+struct BlockingGroups {
+    int left, center, right;
+    float tilePos[BLOCKING_POS_SIZE];
 };
 
 /**
@@ -91,7 +64,7 @@ public:
     // Member functions
     virtual const char* getName() const;
 
-    void queryBlocking(int x, int y, uint8_t* blocking, int bw, int bh) const;
+    void queryBlocking(BlockingGroups*, int sx, int sy, int vw, int vh) const;
     void queryVisible(const Coords &coords, int radius,
                       void (*func)(const Coords*, VisualId, void*),
                       void* user, const Object** focus) const;
@@ -105,19 +78,20 @@ public:
     void setTileAt(const Coords &coords, TileId tid);
     bool isWorldMap() const;
     bool isEnclosed(const Coords &party);
-    class Creature *addCreature(const class Creature *m, Coords coords);
-    class Object *addObject(MapTile tile, MapTile prevTile, Coords coords);
+    class Creature *addCreature(const class Creature *m, const Coords& coords);
+    class Object *addObject(MapTile tile, MapTile prevTile, const Coords& coords);
     class Object *addObject(Object *obj, Coords coords);
     void removeObject(const class Object *rem, bool deleteObject = true);
     ObjectDeque::iterator removeObject(ObjectDeque::iterator rem, bool deleteObject = true);
     void clearObjects();
-    class Creature *moveObjects(MapCoords avatar);
+    class Creature *moveObjects(const Coords& avatar);
     int getNumberOfCreatures();
-    int getValidMoves(const MapCoords& from, MapTile transport);
+    int getValidMoves(const Coords& from, MapTile transport);
     bool move(Object *obj, Direction d);
     void alertGuards();
-    const MapCoords &getLabel(Symbol name) const;
-    const char* labelAt(const MapCoords&) const;
+    const Coords* getLabel(Symbol name) const;
+    const char* labelAt(const Coords&) const;
+    void putInBounds(Coords&) const;
 
     // u4dos compatibility
     void fillMonsterTable(SaveGameMonsterRecord* table) const;
@@ -134,20 +108,19 @@ public:
                     levels;
     uint16_t        chunk_width,
                     chunk_height;
+    uint16_t        boundMaxX,
+                    boundMaxY;
     uint16_t        flags;
     uint16_t        music;
     unsigned int    offset;
 
-    //CompressedChunkList compressed_chunks;
+    //uint8_t* compressed_chunks;       // Ultima 5 map
     PortalList      portals;
-    AnnotationMgr  *annotations;
-    MapData         data;
-#ifdef USE_GL
-    uint8_t* chunks;
-#endif
+    AnnotationMgr*  annotations;
+    TileId*         data;
     ObjectDeque     objects;
-    std::map<Symbol, MapCoords> labels;
-    const Tileset  *tileset;
+    std::map<Symbol, Coords> labels;
+    const Tileset*  tileset;
 
 private:
     // disallow map copying: all maps should be created and accessed
@@ -161,5 +134,20 @@ private:
 inline bool isCity(const Map* map)      { return map->type == Map::CITY; }
 inline bool isCombatMap(const Map* map) { return map->type == Map::COMBAT; }
 inline bool isDungeon(const Map* map)   { return map->type == Map::DUNGEON; }
+
+Direction map_pathTo(const Coords &a, const Coords &b,
+                     int valid_dirs = MASK_DIR_ALL, bool towards = true,
+                     const Map *map = NULL);
+Direction map_pathAway(const Coords &a, const Coords &b,
+                       int valid_dirs = MASK_DIR_ALL);
+void map_wrap(Coords&, const Map *map);
+void map_move(Coords&, Direction d, const Map *map = NULL);
+void map_move(Coords&, int dx, int dy, const Map *map = NULL);
+int  map_getRelativeDirection(const Coords& a, const Coords& b, const Map* map = NULL);
+int  map_movementDistance(const Coords& a, const Coords &b, const Map *map = NULL);
+int  map_distance(const Coords& a, const Coords& b, const Map* map = NULL);
+bool map_outOfBounds(const Map* map, const Coords& c);
+
+#define MAP_IS_OOB(M,C) map_outOfBounds(M, C)
 
 #endif

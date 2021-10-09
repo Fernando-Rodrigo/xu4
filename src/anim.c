@@ -159,7 +159,7 @@ void anim_advance(Animator* an, float seconds)
             // Update value.
             switch (it->animType) {
                 case ANIM_CYCLE_RANDOM_I:
-                    if (it->var.i.chance < xu4_random(100)) {
+                    if (it->var.i.chance > xu4_random(100)) {
                         int n = it->var.i.current + 1;
                         it->var.i.current =
                             (n < it->var.i.end) ? n : it->var.i.start;

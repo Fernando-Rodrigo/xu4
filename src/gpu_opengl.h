@@ -12,6 +12,8 @@
 enum GLObject {
     GLOB_DRAW_LIST0,
     GLOB_DRAW_LIST1,
+    GLOB_FX_LIST0,
+    GLOB_FX_LIST1,
     GLOB_QUAD,
     GLOB_MAP_CHUNK0,
     GLOB_MAP_CHUNK1,
@@ -22,6 +24,7 @@ enum GLObject {
 
 enum GLTextureUnit {
     GTU_CMAP,
+    GTU_MATERIAL,
     GTU_SHADOW,
     GTU_SCALER_LUT
 };
@@ -49,22 +52,24 @@ struct OpenGLResources {
 
     GLuint shadeColor;
     GLint  slocTrans;
-    GLint  slocCmap;
     GLint  slocTint;
     GLint  slocScroll;
 
     GLuint shadeWorld;
     GLint  worldTrans;
-    GLint  worldCmap;
     GLint  worldShadowMap;
+    GLint  worldScroll;
 
     GLuint tilesTex;            // Managed by user.
+    GLuint tilesMat;            // Managed by user.
     float  tilesVDim;
     float  time;
-    int    dbuf;
-    float* dptr;
+    int    drawBuf;
+    int    fxBuf;
+    float* drawPtr;
+    float* fxPtr;
     int    blockCount;
     GLsizei mapChunkVertCount;
     uint16_t mapChunkDim;       // Size in tiles (width & height are the same).
-    uint16_t mapChunkLoc[4];    // Chunk X,Y of associated GLOB_MAP_CHUNK.
+    uint16_t mapChunkId[4];     // Chunk X,Y of associated GLOB_MAP_CHUNK.
 };
