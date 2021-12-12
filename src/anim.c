@@ -4,8 +4,6 @@
 
 extern int xu4_random(int);
 
-#define dprint  printf
-
 enum AnimType {
     ANIM_CYCLE_I,
     ANIM_CYCLE_RANDOM_I,
@@ -109,21 +107,27 @@ static AnimId anim_alloc(Animator* an)
 static void anim_release(Animator* an, AnimatedValue* it)
 {
     AnimatedValue* bank = BANK(an);
-
-    //dprint("anim_release %ld\n", it - bank);
+    int itPos, last;
 
     it->state = ANIM_FREE;
 
     // Link into the free list.
     it->NEXT_FREE = an->firstFree;
-    an->firstFree = it - bank;
+    an->firstFree = itPos = it - bank;
 
     // Adjust used downward to the next active value.
-    if (it == (bank + an->used - 1)) {
-        while (it != bank && it->state == ANIM_FREE)
-            --it;
-        an->used = it - bank;
+    last = an->used - 1;
+    if (itPos == last) {
+        do {
+            --last;
+        } while (last >= 0 && bank[last].state == ANIM_FREE);
+        an->used = last + 1;
     }
+}
+
+static float lerp(float start, float end, float frac)
+{
+    return start + (end - start) * frac;
 }
 
 /*
@@ -134,13 +138,15 @@ void anim_advance(Animator* an, float seconds)
     AnimatedValue* it  = BANK(an);
     AnimatedValue* end = it + an->used;
     AnimatedValue* firstDone = NULL;
-    AnimatedValue* lastDone;
+    AnimatedValue* endDone = NULL;
 
-    while (it != end) {
+    for ( ; it != end; ++it) {
         if (it->state == ANIM_PLAYING) {
             // Advance time.
             it->ctime += seconds;
             if (it->ctime >= it->duration) {
+                // Cycle complete.
+
                 if (it->loops == ANIM_FOREVER) {
                     it->ctime -= it->duration;
                 } else {
@@ -151,33 +157,49 @@ void anim_advance(Animator* an, float seconds)
                         it->state = ANIM_FINISHED;
                         if (! firstDone)
                             firstDone = it;
-                        lastDone = it + 1;
+                        endDone = it + 1;
                     }
                 }
-            }
 
-            // Update value.
-            switch (it->animType) {
-                case ANIM_CYCLE_RANDOM_I:
+                if (it->animType == ANIM_CYCLE_RANDOM_I) {
                     if (it->var.i.chance > xu4_random(100)) {
                         int n = it->var.i.current + 1;
                         it->var.i.current =
                             (n < it->var.i.end) ? n : it->var.i.start;
                     }
+                    continue;
+                }
+            }
+
+            // Update value.
+            switch (it->animType) {
+                case ANIM_LINEAR_F2:
+                    if (it->state == ANIM_FINISHED) {
+                        it->var.f2.current[0] = it->var.f2.end[0];
+                        it->var.f2.current[1] = it->var.f2.end[1];
+                    } else {
+                        float frac = it->ctime / it->duration;
+                        it->var.f2.current[0] = lerp(it->var.f2.start[0],
+                                                     it->var.f2.end[0], frac);
+                        it->var.f2.current[1] = lerp(it->var.f2.start[1],
+                                                     it->var.f2.end[1], frac);
+                    }
                     break;
             }
         }
-        ++it;
     }
 
     // Invoke the finish handler and release the slot for completed animations.
-    if (firstDone) {
-        for (it = firstDone; it != lastDone; ++it) {
-            if (it->state == ANIM_FINISHED) {
-                if (it->finishId)
-                    an->finish(an->finishData, it->finishId);
-                anim_release(an, it);
-            }
+    while (firstDone != endDone) {
+        // This iterates backwards so that the last released slot has the
+        // lowest firstFree index of the batch.  This sets up the next
+        // anim_alloc to produce a lower Animator::used value.
+
+        --endDone;
+        if (endDone->state == ANIM_FINISHED) {
+            if (endDone->finishId)
+                an->finish(an->finishData, endDone->finishId);
+            anim_release(an, endDone);
         }
     }
 }
@@ -205,7 +227,23 @@ AnimId anim_startCycleRandomI(Animator* an, float dur, int loops, uint32_t fid,
         it->var.i.current = start;
         it->var.i.chance = chance;
 
-        //dprint("anim_start %d dur:%f chance:%d\n", id, dur, chance);
+        //printf("anim_start %d dur:%f chance:%d\n", id, dur, chance);
+    }
+    return id;
+}
+
+AnimId anim_startLinearF2(Animator* an, float dur, uint32_t fid,
+                          float* start, float* end)
+{
+    AnimId id = anim_alloc(an);
+    if (id != FREE_TERM) {
+        AnimatedValue* it = BANK(an) + id;
+        it->animType = ANIM_LINEAR_F2;
+        anim_stdInit(it, dur, 1, fid);
+        it->var.f2.start[0] = it->var.f2.current[0] = start[0];
+        it->var.f2.start[1] = it->var.f2.current[1] = start[1];
+        it->var.f2.end[0]   = end[0];
+        it->var.f2.end[1]   = end[1];
     }
     return id;
 }

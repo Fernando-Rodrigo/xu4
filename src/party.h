@@ -2,19 +2,13 @@
  * $Id$
  */
 
-#ifndef PLAYER_H
-#define PLAYER_H
+#ifndef PARTY_H
+#define PARTY_H
 
-#include <list>
 #include <string>
 #include <vector>
 
 #include "creature.h"
-#include "direction.h"
-#include "observable.h"
-#include "savegame.h"
-#include "tile.h"
-#include "types.h"
 #ifdef IOS
 #include "ios_helpers.h"
 #endif
@@ -116,7 +110,7 @@ public:
     virtual void addStatus(StatusType status);
     void adjustMp(int pts);
     void advanceLevel();
-    void applyEffect(TileEffect effect);
+    void applyEffect(Map*, TileEffect effect);
     void awardXp(int xp);
     bool heal(HealType type);
     virtual void removeStatus(StatusType status);
@@ -125,7 +119,7 @@ public:
     EquipError setArmor(const Armor *a);
     EquipError setWeapon(const Weapon *w);
 
-    virtual bool applyDamage(int damage, bool byplayer = false);
+    virtual bool applyDamage(Map*, int damage, bool byplayer = false);
     virtual int getAttackBonus() const;
     virtual int getDefense() const;
     virtual bool dealDamage(Map*, Creature *m, int damage);
@@ -169,7 +163,7 @@ public:
 
 typedef std::vector<PartyMember *> PartyMemberVector;
 
-class Party : public Observable<Party *, PartyEvent &> {
+class Party {
     friend class PartyMember;
 public:
     Party(SaveGame *saveGame);
@@ -180,7 +174,7 @@ public:
     void adjustFood(int food);
     void adjustGold(int gold);
     void adjustKarma(KarmaAction action);
-    void applyEffect(TileEffect effect);
+    void applyEffect(Map*, TileEffect effect);
     bool attemptElevation(Virtue virtue);
     bool burnTorch(int turns = 1);
     bool canEnterShrine(Virtue virtue);
@@ -219,6 +213,7 @@ public:
     PartyMember *member(int index) const;
 
 private:
+    void initTransport(const MapTile& tile);
     void syncMembers();
     PartyMemberVector members;
     SaveGame *saveGame;
@@ -230,6 +225,6 @@ private:
 #endif
 };
 
-bool isPartyMember(Object *punknown);
+bool isPartyMember(const Object *punknown);
 
 #endif

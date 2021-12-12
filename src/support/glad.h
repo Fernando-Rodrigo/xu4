@@ -9,15 +9,15 @@
     Profile: core
     Extensions:
         
-    Loader: False
+    Loader: True
     Local files: True
     Omit khrplatform: True
     Reproducible: False
 
     Commandline:
-        --profile="core" --api="gl=3.3" --generator="c" --spec="gl" --no-loader --local-files --omit-khrplatform --extensions=""
+        --profile="core" --api="gl=3.3" --generator="c" --spec="gl" --local-files --omit-khrplatform --extensions=""
     Online:
-        https://glad.dav1d.de/#profile=core&language=c&specification=gl&api=gl%3D3.3
+        https://glad.dav1d.de/#profile=core&language=c&specification=gl&loader=on&api=gl%3D3.3
 */
 
 
@@ -84,6 +84,7 @@ typedef void* (* GLADloadproc)(const char *name);
 #include <stdint.h>
 
 GLAPI struct gladGLversionStruct GLVersion;
+GLAPI int gladLoadGL(void);
 GLAPI int gladLoadGLLoader(GLADloadproc);
 
 typedef unsigned int GLenum;

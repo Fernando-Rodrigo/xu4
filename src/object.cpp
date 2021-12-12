@@ -2,13 +2,29 @@
  * object.cpp
  */
 
-#include <algorithm>
-
 #include "object.h"
-#include "event.h"
+#include "context.h"
+#include "game.h"
 #include "map.h"
-#include "tileset.h"
+#include "screen.h"
 #include "xu4.h"
+
+#ifdef GPU_RENDER
+#include "event.h"
+#include "tileset.h"
+#endif
+
+Object::Object(Type type) :
+  tile(0),
+  prevTile(0),
+  movement(MOVEMENT_FIXED),
+  objType(type),
+  animId(ANIM_UNUSED),
+  focused(false),
+  visible(true),
+  animated(true),
+  onMaps(0)
+{}
 
 Object::~Object() {
 #ifdef GPU_RENDER
@@ -23,13 +39,13 @@ bool Object::setDirection(Direction d) {
 }
 
 /*
- * NOTE: This does not set prevCoords.
+ * Sets Object coords & prevCoords to the specified position.
  */
-void Object::placeOnMap(Map* map, const Coords& coords) {
-    if (find(maps.begin(), maps.end(), map) == maps.end())
-        maps.push_back(map);
+void Object::placeOnMap(Map* map, const Coords& pos) {
+    if (! onMaps || ! map->objectPresent(this))
+        ++onMaps;
 
-    setCoords(coords);
+    coords = prevCoords = pos;
 
 #ifdef GPU_RENDER
     /* Start frame animation */
@@ -47,16 +63,14 @@ void Object::placeOnMap(Map* map, const Coords& coords) {
  * If the object is not a PartyMember then it is also deleted.
  */
 void Object::removeFromMaps() {
-    size_t size = maps.size();
-    for (size_t i = 0; i < size; i++) {
-        bool lastMap = (i == size - 1);
-        maps[i]->removeObject(this, lastMap);
+    Location* loc = c->location;
+    while (onMaps && loc) {
+        if (loc->map->removeObject(this, onMaps == 1))
+            --onMaps;
+        loc = loc->prev;
     }
 }
 
-
-#include "screen.h"
-#include "game.h"
 void Object::animateMovement()
 {
     //TODO abstract movement - also make screen.h and game.h not required

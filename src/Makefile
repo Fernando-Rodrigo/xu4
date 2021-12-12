@@ -22,7 +22,7 @@ UIFLAGS=
 endif
 
 ifeq ($(GPU),true)
-    CONF=boron
+	CONF=boron
 	UIFLAGS+=-DUSE_GL -DGPU_RENDER
 	UILIBS+=-lGL
 endif
@@ -51,7 +51,7 @@ include Makefile.common
 install::
 	$(INSTALL) -D $(MAIN) $(bindir)/$(MAIN)
 	$(INSTALL) -D ../icons/xu4.png $(datadir)/icons/hicolor/48x48/apps/xu4.png
-	$(INSTALL) -D ../dist/u4.desktop $(datadir)/applications/u4.desktop
+	$(INSTALL) -D ../dist/xu4.desktop $(datadir)/applications/xu4.desktop
 	mkdir -p $(libdir)/u4/music
 	$(INSTALL) ../mid/*.mid $(libdir)/u4/music
 	$(INSTALL) ../mid/*.it $(libdir)/u4/music

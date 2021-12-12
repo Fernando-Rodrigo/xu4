@@ -7,17 +7,13 @@
 
 #include "config.h"
 #include "context.h"
-#include "creature.h"
 #include "error.h"
 #include "event.h"
-#include "image.h"
 #include "imagemgr.h"
-#include "location.h"
 #include "settings.h"
 #include "screen.h"
 #include "tileanim.h"
 #include "tileset.h"
-#include "utils.h"
 #include "xu4.h"
 
 
@@ -169,6 +165,13 @@ void Tile::loadImage() {
         if (anim == NULL)
             errorWarning("animation '%s' not found",
                          xu4.config->symbolName(animationRule));
+#ifndef GPU_RENDER
+        // Hack to disable scroll_pool if not using GPU.
+        else if (anim->transforms[0]->animType == ATYPE_SCROLL &&
+                 anim->transforms[0]->var.scroll.vid) {
+            anim = NULL;
+        }
+#endif
     }
 }
 

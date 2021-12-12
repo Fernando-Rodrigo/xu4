@@ -22,7 +22,7 @@ libxml2: does [
 	]
 ]
 
-exe %u4 [
+exe %xu4 [
 	include_from [%src %src/lzw %src/support]
 	win32 [
 		include_from %../usr/include
@@ -77,13 +77,14 @@ exe %u4 [
 		libxml2
 		sources_from %src [
 			%config.cpp
-			%script.cpp
+			%script_xml.cpp
 			%xml.cpp
+			%support/SymbolTable.cpp
 		]
 	]
 
 	if use_gl [
-        if gpu_render [cflags "-DGPU_RENDER"]
+		if gpu_render [cflags "-DGPU_RENDER"]
 		cflags "-DUSE_GL"
 		opengl
 	]
@@ -102,6 +103,8 @@ exe %u4 [
 			lflags "-static-libstdc++"
 			libs [%png %z]
 		]
+		include_from %src/win32
+		sources/flags [%src/win32/xu4.rc] "-I src/win32"
 	]
 	cflags {-DVERSION=\"KR-1.0\"}
 
@@ -145,8 +148,8 @@ exe %u4 [
 		%movement.cpp
 		%names.cpp
 		%object.cpp
+		%party.cpp
 		%person.cpp
-		%player.cpp
 		%portal.cpp
 		%progress_bar.cpp
 		%rle.cpp
@@ -162,18 +165,18 @@ exe %u4 [
 		%tile.cpp
 		%tileset.cpp
 		%tileview.cpp
-		%u4.cpp
 		%u4file.cpp
 		%utils.cpp
 		%unzip.c
 		%view.cpp
+		%xu4.cpp
 
 		%lzw/hash.c
 		%lzw/lzw.c
 		%lzw/u6decode.cpp
 		%lzw/u4decode.cpp
 
-		%support/SymbolTable.cpp
+		%support/notify.c
 	]
 ]
 

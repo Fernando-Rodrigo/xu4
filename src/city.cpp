@@ -7,10 +7,7 @@
 #include "config.h"
 #include "context.h"
 #include "conversation.h"
-#include "creature.h"
-#include "object.h"
-#include "person.h"
-#include "player.h"
+#include "party.h"
 #include "xu4.h"
 
 
@@ -63,7 +60,7 @@ void City::addPeople() {
 
     for (current = persons.begin(); current != persons.end(); current++) {
         Person *p = *current;
-        if ( (p->getTile() != 0)
+        if ( (p->tile != 0)
              && !(c->party->canPersonJoin(p->getName(), NULL)
                   && c->party->isPersonJoined(p->getName()))
             )

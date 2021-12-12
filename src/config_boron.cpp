@@ -18,14 +18,11 @@
 #include "imageloader.h"
 #include "imagemgr.h"
 #include "map.h"
-#include "names.h"
 #include "portal.h"
-#include "savegame.h"
 #include "screen.h"
 #include "settings.h"
 #include "shrine.h"
 #include "sound.h"
-#include "tile.h"
 #include "tileanim.h"
 #include "tileset.h"
 #include "weapon.h"
@@ -118,6 +115,7 @@ struct ConfigBoron : public Config {
     Symbol sym_imageset;
     Symbol sym_tileanims;
     Symbol sym_Ucel;
+    Symbol sym_rect;
 };
 
 #define CB  static_cast<ConfigData*>(backend)
@@ -162,6 +160,7 @@ const UBuffer* ConfigBoron::blockBuffer(int value, uint32_t n, int dataType) con
 #define WORD_NONE   (UT_BI_COUNT + UT_WORD)
 #define COORD_NONE  (UT_BI_COUNT + UT_COORD)
 #define STRING_NONE (UT_BI_COUNT + UT_STRING)
+#define FILE_NONE   (UT_BI_COUNT + UT_FILE)
 #define BLOCK_NONE  (UT_BI_COUNT + UT_BLOCK)
 
 static bool validParam(const UBlockIt& bi, int count, const uint8_t* dtype)
@@ -507,7 +506,7 @@ static Map* conf_makeMap(ConfigBoron* cfg, Tileset* tiles, UBlockIt& bi)
 {
     static const uint8_t mparam[3] = {
         // fname  numA  numB
-        UT_FILE, UT_COORD, UT_COORD
+        FILE_NONE, UT_COORD, UT_COORD
     };
     if (! validParam(bi, sizeof(mparam), mparam))
         return NULL;
@@ -543,7 +542,10 @@ static Map* conf_makeMap(ConfigBoron* cfg, Tileset* tiles, UBlockIt& bi)
     if (! map)
         return NULL;
 
-    map->fname  = ASTR(bi.it->series.buf);
+    if (ur_is(bi.it, UT_FILE))
+        map->fname = ASTR(bi.it->series.buf);   // Data from original U4 file.
+    else
+        map->fname = UR_INVALID_BUF;            // Data from Config::mapFile.
     map->id     = (MapId) numA[0];
     map->type   = mtype;
     map->border_behavior = numA[2];
@@ -859,7 +861,7 @@ ConfigBoron::ConfigBoron(const char* modulePath)
     }
 
     ur_internAtoms(ut, "hit_flash miss_flash random shrine abyss"
-                       " imageset tileanims _cel", &sym_hitFlash);
+                       " imageset tileanims _cel rect", &sym_hitFlash);
 
 
     // Read package table of contents.
@@ -1188,6 +1190,14 @@ const CDIEntry* Config::imageFile( const char* id ) const {
 }
 
 /*
+ * Return a CDIEntry pointer for the given Map::id.
+ */
+const CDIEntry* Config::mapFile( uint32_t id ) const {
+    uint32_t appId = CDI32('M', 'A', (id >> 8), (id & 255));
+    return cdi_findAppId(CX->toc, CX->tocUsed, appId);
+}
+
+/*
  * Return a CDIEntry pointer for the given MusicTrack id (see sound.h)
  */
 const CDIEntry* Config::musicFile( uint32_t id ) const {
@@ -1342,6 +1352,8 @@ const Coords* Config::moongateCoords(int phase) const {
 int Config::atlasImages(StringId spec, AtlasSubImage* images, int max) {
     UCell cell;
     UBlockIt bi;
+    UAtom atomRect = CX->sym_rect;
+    int prevOp = AEDIT_NOP;
     int count = 0;
 
     // Spec is actually a block! not a string!.
@@ -1353,11 +1365,26 @@ int Config::atlasImages(StringId spec, AtlasSubImage* images, int max) {
         if (ur_is(bi.it, UT_WORD) && ur_is(bi.it+1, UT_COORD)) {
             images->name = ur_atom(bi.it);
             ++bi.it;
+next:
             images->x = bi.it->coord.n[0];
             images->y = bi.it->coord.n[1];
             ++images;
             if (++count >= max)
                 break;
+        }
+        else if (ur_is(bi.it, UT_OPTION) && ur_is(bi.it+1, UT_COORD)) {
+            images->name = prevOp =
+                (ur_atom(bi.it) == atomRect) ? AEDIT_RECT : AEDIT_BRUSH;
+            ++bi.it;
+            images->w = bi.it->coord.n[2];
+            images->h = bi.it->coord.n[3];
+            goto next;
+        }
+        else if (ur_is(bi.it, UT_COORD)) {
+            images->name = prevOp;
+            images->w = bi.it->coord.n[2];
+            images->h = bi.it->coord.n[3];
+            goto next;
         }
     }
     return count;

@@ -12,21 +12,28 @@
  */
 class Controller {
 public:
-    Controller(int timerInterval = 1);
+    Controller(short timerInterval = 0);
     virtual ~Controller();
 
     /* methods for interacting with event manager */
     bool notifyKeyPressed(int key);
-    int getTimerInterval();
+    int getTimerInterval() const { return timerInterval; }
+    bool deleteOnPop() const { return autoDelete; }
     static void timerCallback(void *data);
 
     /* control methods subclasses may want to override */
+    virtual bool present();
+    virtual void conclude();
     virtual bool keyPressed(int key);
     virtual void timerFired();
     virtual bool isCombatController() const { return false; }
 
+protected:
+    void setDeleteOnPop(bool enable = true) { autoDelete = enable; }
+
 private:
-    int timerInterval;
+    short timerInterval;
+    bool autoDelete;
 };
 
 // helper functions for the waitable controller; they just avoid

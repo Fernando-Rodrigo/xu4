@@ -107,9 +107,15 @@ static ALLEGRO_BITMAP* loadBitmapPng(const char* filename) {
 void screenInit_sys(const Settings* settings, int* dim, int reset) {
     ScreenAllegro* sa;
 #ifdef USE_GL
+#ifdef _WIN32
+    // ALLEGRO_OPENGL_3_0 causes al_create_display() to fail on Windows 7 and
+    // with Wine.  We check that version 3.3 calls are available below.
+    int dflags = ALLEGRO_OPENGL;
+#else
     // NOTE: _FORWARD_COMPATIBLE requires al_set_current_opengl_context()
     int dflags = ALLEGRO_OPENGL | ALLEGRO_OPENGL_3_0 |
                  ALLEGRO_OPENGL_FORWARD_COMPATIBLE;
+#endif
 #else
     int dflags = 0;
 #endif
@@ -118,12 +124,6 @@ void screenInit_sys(const Settings* settings, int* dim, int reset) {
 
     if (reset) {
         sa = SA;
-
-        // On reset sa->queue is not touched as the TimedEventMgr has a timer
-        // registered and that needs to keep running.
-
-        // Halt refresh timer as display re-creation may take a moment.
-        al_stop_timer(sa->refreshTimer);
 
         al_unregister_event_source(sa->queue, al_get_display_event_source(sa->disp));
 
@@ -165,6 +165,23 @@ void screenInit_sys(const Settings* settings, int* dim, int reset) {
     sa->disp = al_create_display(dw, dh);
     if (! sa->disp)
         goto fatal;
+
+#if defined(_WIN32) && defined(USE_GL)
+    {
+    uint32_t ver = al_get_opengl_version();
+    int major = ver>>24;
+    int minor = (ver>>16) & 255;
+    if (major < 3 || (major == 3 && minor < 3))
+        errorFatal("OpenGL 3.3 is required (version %d.%d.%d)",
+                   major, minor, (ver>>8) & 255);
+
+    if (! reset) {
+        al_set_current_opengl_context(sa->disp);
+        if (! gladLoadGL())
+            errorFatal("Unable to get OpenGL function addresses");
+    }
+    }
+#endif
 
     dim[0] = al_get_display_width(sa->disp);
     dim[1] = al_get_display_height(sa->disp);
@@ -240,29 +257,16 @@ void screenInit_sys(const Settings* settings, int* dim, int reset) {
     // as the context is lost when mucking with bitmaps.
     al_set_current_opengl_context(sa->disp);
 
-#ifdef _WIN32
-    if (! reset) {
-        if (! gladLoadGLLoader((GLADloadproc) al_get_opengl_proc_address))
-            errorFatal("Unable to get OpenGL function addresses");
-    }
-#endif
-
     if (! gpu_init(&sa->gpu, dw, dh, settings->scale))
         errorFatal("Unable to initialize OpenGL resources");
 #endif
 
     sa->refreshRate = 1.0 / settings->screenAnimationFramesPerSecond;
-    if (reset) {
-        al_set_timer_speed(sa->refreshTimer, sa->refreshRate);
-    } else {
-        sa->refreshTimer = al_create_timer(sa->refreshRate);
-
-        al_register_event_source(sa->queue, al_get_timer_event_source(sa->refreshTimer));
+    if (! reset) {
         al_register_event_source(sa->queue, al_get_keyboard_event_source());
     }
 
     al_register_event_source(sa->queue, al_get_display_event_source(sa->disp));
-    al_start_timer(sa->refreshTimer);
     return;
 
 fatal:
@@ -271,9 +275,6 @@ fatal:
 
 void screenDelete_sys() {
     ScreenAllegro* sa = SA;
-
-    al_destroy_timer(sa->refreshTimer);
-    sa->refreshTimer = NULL;
 
 #ifdef USE_GL
     gpu_free(&sa->gpu);
@@ -372,17 +373,18 @@ static void updateDisplay(int x, int y, int w, int h) {
 
     CPU_END("ut:")
 }
+#else
+extern void screenRender();
 #endif
 
+extern void musicUpdate();
+
 void screenSwapBuffers() {
+    musicUpdate();
+
 #ifdef USE_GL
     CPU_START()
-#ifndef GPU_RENDER
-    const ScreenAllegro* sa = SA;
-    gpu_viewport(0, 0, al_get_display_width(sa->disp),
-                       al_get_display_height(sa->disp));
-    gpu_background(xu4.gpu, NULL, xu4.screenImage);
-#endif
+    screenRender();
     al_flip_display();
     CPU_END("ut:")
 #else
@@ -390,19 +392,23 @@ void screenSwapBuffers() {
 #endif
 }
 
+// Private function for Allegro backend.
+float screenFrameDuration() {
+    return SA->refreshRate;
+}
+
 void screenWait(int numberOfAnimationFrames) {
-    ScreenAllegro* sa = SA;
+#if defined(USE_GL) && ! defined(GPU_RENDER)
+    screenUploadToGPU();
+#endif
 
     // Does this wait need to handle world animation or input (e.g. user
     // quits game)?
 
     assert(numberOfAnimationFrames >= 0);
 
-    // Stop refresh timer to prevent events from accumulating in queue.
-    al_stop_timer(sa->refreshTimer);
     screenSwapBuffers();
-    al_rest(sa->refreshRate * numberOfAnimationFrames);
-    al_start_timer(sa->refreshTimer);
+    al_rest(SA->refreshRate * numberOfAnimationFrames);
 }
 
 void screenSetMouseCursor(MouseCursor cursor) {

@@ -3,14 +3,10 @@
  */
 
 #include "cheat.h"
-#include "location.h"
-#include "map.h"
 #include "config.h"
-#include "context.h"
 #include "game.h"
-#include "mapmgr.h"
 #include "portal.h"
-#include "player.h"
+#include "party.h"
 #include "screen.h"
 #include "stats.h"
 #include "tileset.h"

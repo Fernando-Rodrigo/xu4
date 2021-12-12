@@ -3,25 +3,16 @@
  */
 
 #include <string>
-#include <vector>
 
 #include "shrine.h"
 
-#include "annotation.h"
-#include "config.h"
-#include "context.h"
-#include "event.h"
 #include "game.h"
 #include "imagemgr.h"
-#include "location.h"
-#include "creature.h"
-#include "names.h"
-#include "player.h"
+#include "party.h"
 #include "portal.h"
 #include "screen.h"
 #include "settings.h"
 #include "tileset.h"
-#include "types.h"
 #include "u4.h"
 #include "xu4.h"
 
@@ -124,7 +115,7 @@ void Shrine::enter() {
 
 void Shrine::enhancedSequence() {
     /* replace the 'static' avatar tile with grass */
-    annotations->add(Coords(5, 6, c->location->coords.z),
+    annotations.add(Coords(5, 6, c->location->coords.z),
             tileset->getByName(Tile::sym.grass)->getId(), false, true);
 
     screenDisableCursor();
@@ -134,7 +125,7 @@ void Shrine::enhancedSequence() {
 
     Object *obj = addCreature(xu4.config->creature(BEGGAR_ID),
                               Coords(5, 10, c->location->coords.z));
-    obj->setTile(tileset->getByName(Tile::sym.avatar)->getId());
+    obj->tile = tileset->getByName(Tile::sym.avatar)->getId();
 
     for (int i = 0; i < 4; ++i) {
         gameUpdateScreen();
@@ -144,7 +135,7 @@ void Shrine::enhancedSequence() {
 
     gameUpdateScreen();
     EventHandler::wait_msecs(800);
-    obj->setTile(xu4.config->creature(BEGGAR_ID)->getTile());
+    obj->tile = xu4.config->creature(BEGGAR_ID)->tile;
     gameUpdateScreen();
 
     screenMessage("\n...and kneel before the altar.\n");
@@ -162,7 +153,8 @@ void Shrine::meditationCycle() {
 
     screenDisableCursor();
     for (int i = 0; i < MEDITATION_MANTRAS_PER_CYCLE; i++) {
-        EventHandler::wait_msecs(interval);
+        if (EventHandler::wait_msecs(interval))
+            return;
         screenMessage(".");
     }
     askMantra();

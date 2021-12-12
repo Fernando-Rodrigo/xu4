@@ -10,7 +10,6 @@
 
 #include "config.h"
 #include "image.h"
-#include "observer.h"
 #include "u4file.h"
 
 #define errorLoadImage(Sym) \
@@ -123,9 +122,16 @@ struct ImageSymbols {
     Symbol whitebead;
 };
 
+enum AtlasEditOpcode {
+    AEDIT_NOP,
+    AEDIT_BRUSH,
+    AEDIT_RECT,
+    AEDIT_OP_COUNT
+};
+
 struct AtlasSubImage {
-    Symbol name;
-    int16_t x, y;
+    Symbol name;        // Image name or AtlasEditOpcode.
+    int16_t x, y, w, h;
 };
 
 struct SubImage {
@@ -191,7 +197,7 @@ public:
 /**
  * The image manager singleton that keeps track of all the images.
  */
-class ImageMgr : Observer<Settings *> {
+class ImageMgr {
 public:
     static ImageSymbols sym;
 
@@ -207,6 +213,7 @@ public:
     const RGBA* vgaPalette();
 
 private:
+    static void notice(int, void*, void*);
     const SubImage* getSubImage(Symbol name, ImageInfo** infoPtr);
     ImageInfo* load(ImageInfo* info, bool returnUnscaled);
     U4FILE * getImageFile(ImageInfo *info);
@@ -218,8 +225,6 @@ private:
     void fixupAbacus(Image *im, int prescale);
     void fixupDungNS(Image *im);
     void fixupFMTowns(Image *im);
-
-    void update(Settings *newSettings);
 
     std::map<Symbol, ImageSet *> imageSets;
     ImageSet *baseSet;

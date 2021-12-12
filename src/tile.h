@@ -158,7 +158,6 @@ public:
     uint16_t startFrameAnim() const;
 
     TileId id;          /**< an id that is unique across all tilesets */
-    VisualId vid;       /**< The default rendering resource identifier */
     Symbol name;        /**< The name of this tile */
     Symbol imageName;   /**< The name of the image that belongs to this tile */
     Symbol animationRule;
@@ -181,7 +180,11 @@ public:
 
 struct TileRenderData {
     VisualId vid;       /**< The default rendering resource identifier */
-    VisualId scroll;    /**< The scrolling rendering resource identifier */
+    int16_t  animType;  /**< TileAnimType */
+    union {
+        VisualId scroll;    /**< Scrolling rendering resource identifier */
+        int8_t   hot[2];    /**< Fire centerX & tileW */
+    } animData;
 };
 
 #endif

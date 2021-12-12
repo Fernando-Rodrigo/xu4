@@ -6,18 +6,19 @@
 #include "u4.h"
 
 #include "city.h"
-#include "combat.h"
 #include "config.h"
 #include "dialogueloader.h"
 #include "debug.h"
 #include "dungeon.h"
 #include "error.h"
-#include "map.h"
 #include "mapmgr.h"
 #include "person.h"
-#include "tileset.h"
 #include "u4file.h"
 #include "xu4.h"
+
+#ifdef GPU_RENDER
+#include "tileset.h"
+#endif
 
 
 #ifdef U5_DAT
@@ -29,9 +30,10 @@ static bool isChunkCompressed(Map *map, int chunk) {
 /**
  * Loads raw data from the given file.
  */
-static bool loadMapData(Map *map, U4FILE *uf, Symbol borderTile) {
+bool loadMapData(Map *map, U4FILE *uf, Symbol borderTile) {
     unsigned int x, xch, y, ych, di;
     unsigned int chunkCols, chunkRows;
+    size_t chunkLen;
     uint8_t* chunk;
     uint8_t* cp;
     const UltimaSaveIds* usaveIds = xu4.config->usaveIds();
@@ -40,16 +42,19 @@ static bool loadMapData(Map *map, U4FILE *uf, Symbol borderTile) {
     Symbol sym_sea = SYM_UNSET;
 #endif
 
+    map->boundMaxX = map->width;
+    map->boundMaxY = map->height;
+
     if (map->chunk_height == 0)
         map->chunk_height = map->height;
     if (map->chunk_width == 0)
         map->chunk_width = map->width;
 
-    map->boundMaxX = map->width;
-    map->boundMaxY = map->height;
-
     chunkCols = map->width / map->chunk_width;
     chunkRows = map->height / map->chunk_height;
+
+    chunkLen = map->chunk_width * map->chunk_height;
+    chunk = new uint8_t[chunkLen];
 
 #ifdef GPU_RENDER
     bool addBorder = false;
@@ -60,12 +65,18 @@ static bool loadMapData(Map *map, U4FILE *uf, Symbol borderTile) {
         map->height += map->chunk_height;
         addBorder = true;
     }
-#endif
+
+    // gpu_drawMap() requires chunk_width & chunk_height to be the same, so
+    // the size is adjusted to be square.
+    // This code assumes the width is never less than height and handles the
+    // intro 19x5 map.
+    int padRows = 0;
+    if (map->chunk_height < map->chunk_width)
+        padRows = map->chunk_width - map->chunk_height;
 
     /* allocate the space we need for the map data */
-    map->data = new TileId[map->width * map->height];
+    map->data = new TileId[map->width * (map->height + padRows)];
 
-#ifdef GPU_RENDER
     if (addBorder) {
         // Fill the entire map with borderTile.
         TileId borderId = Tileset::findTileByName(borderTile)->id;
@@ -74,10 +85,10 @@ static bool loadMapData(Map *map, U4FILE *uf, Symbol borderTile) {
         while (it != end)
             *it++ = borderId;
     }
+#else
+    /* allocate the space we need for the map data */
+    map->data = new TileId[map->width * map->height];
 #endif
-
-    size_t chunkLen = map->chunk_width * map->chunk_height;
-    chunk = new uint8_t[chunkLen];
 
     if (map->offset)
         u4fseek(uf, map->offset, SEEK_CUR);
@@ -117,6 +128,16 @@ static bool loadMapData(Map *map, U4FILE *uf, Symbol borderTile) {
         }
     }
     ok = true;
+
+#ifdef GPU_RENDER
+    if (padRows) {
+        // Force square chunks and clear padded rows.
+        memset(map->data + map->width * map->height, 0,
+               sizeof(TileId) * map->width * padRows);
+        map->height += padRows;
+        map->chunk_height = map->chunk_width;
+    }
+#endif
 
 cleanup:
     delete[] chunk;
@@ -175,7 +196,7 @@ static bool loadCityMap(Map *map, U4FILE *ult) {
     for (i = 0; i < CITY_MAX_PERSONS; i++) {
         if (pd[PD_TILE]) {
             per = new Person(usaveIds->moduleId( pd[PD_TILE] ));
-            per->setPrevTile(usaveIds->moduleId( pd[PD_PREV_TILE] ));
+            per->prevTile = usaveIds->moduleId( pd[PD_PREV_TILE] );
 
             Coords& pos = per->getStart();
             pos.x = pd[PD_X];
@@ -184,7 +205,7 @@ static bool loadCityMap(Map *map, U4FILE *ult) {
 
             if ((j = moveBehavior( pd[PD_MOVE] )) < 0)
                 goto cleanup;
-            per->setMovementBehavior((ObjectMovementBehavior) j);
+            per->movement = (ObjectMovement) j;
 
             city->persons.push_back(per);
             people[i] = per;
@@ -474,9 +495,25 @@ static bool loadDungeonMap(Map *map, U4FILE *uf, FILE *sav) {
 }
 
 bool loadMap(Map *map, FILE* sav) {
+    U4FILE* uf;
     bool ok = false;
+
+#ifdef CONF_MODULE
+    if (map->fname) {
+        string fname( xu4.config->confString(map->fname) );
+        uf = u4fopen(fname);
+    } else {
+        const CDIEntry* ent = xu4.config->mapFile(map->id);
+        if (ent) {
+            uf = u4fopen_stdio(xu4.config->modulePath());
+            u4fseek(uf, ent->offset, SEEK_SET);
+        } else
+            uf = NULL;
+    }
+#else
     string fname( xu4.config->confString(map->fname) );
-    U4FILE* uf = u4fopen(fname);
+    uf = u4fopen(fname);
+#endif
     if (uf) {
         switch (map->type) {
             case Map::CITY:

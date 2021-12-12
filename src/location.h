@@ -7,10 +7,7 @@
 
 #include <vector>
 
-#include "map.h"
 #include "movement.h"
-#include "observable.h"
-#include "types.h"
 
 typedef enum {
     CTX_WORLDMAP    = 0x0001,
@@ -26,22 +23,23 @@ typedef enum {
 #define CTX_NON_COMBAT      (LocationContext)(CTX_ANY & ~CTX_COMBAT)
 #define CTX_CAN_SAVE_GAME   (LocationContext)(CTX_WORLDMAP | CTX_DUNGEON)
 
-class TurnCompleter;
+class Map;
+class TurnController;
 
-class Location : public Observable<Location *, MoveEvent &> {
+class Location {
 public:
-    Location(const Coords& coords, Map *map, int viewmode, LocationContext ctx, TurnCompleter *turnCompleter, Location *prev);
+    Location(const Coords& coords, Map *map, int viewmode, LocationContext ctx, TurnController *turnCompleter, Location *prev);
 
     std::vector<MapTile> tilesAt(const Coords& coords, bool &focus);
     TileId getReplacementTile(const Coords& atCoords, Tile const * forTile);
-    int getCurrentPosition(Coords *coords);
+    int getCurrentPosition(Coords * pos);
     MoveResult move(Direction dir, bool userEvent);
 
     Coords coords;
     Map *map;
     int viewMode;
     LocationContext context;
-    TurnCompleter *turnCompleter;
+    TurnController *turnCompleter;
     Location *prev;
 };
 

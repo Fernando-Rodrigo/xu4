@@ -5,24 +5,15 @@
 #ifndef COMBAT_H
 #define COMBAT_H
 
-#include <map>
-
-#include "direction.h"
-#include "map.h"
-#include "controller.h"
-#include "creature.h"
 #include "game.h"
-#include "object.h"
-#include "observer.h"
-#include "player.h"
-#include "savegame.h"
-#include "types.h"
+#include "party.h"
 
 #define AREA_CREATURES   16
 #define AREA_PLAYERS    8
 
 class CombatMap;
 class Creature;
+class Dungeon;
 class MoveEvent;
 class Weapon;
 
@@ -38,68 +29,57 @@ typedef enum {
 /**
  * CombatController class
  */
-class CombatController : public Controller, public Observer<Party *, PartyEvent &>, public TurnCompleter {
-protected:
-    CombatController();
+class CombatController : public TurnController {
 public:
-    CombatController(CombatMap *m);
-    CombatController(MapId id);
+    static bool attackHit(const Creature *attacker, const Creature *defender);
+    static void engage(MapId mid, const Creature* creatures);
+    static void engageDungeon(Dungeon* dng, int room, Direction from);
+
+    CombatController(CombatMap* cmap = NULL);
     virtual ~CombatController();
 
-    // Accessor Methods
-    bool          isCombatController() const { return true; }
-    bool          isCamping() const;
-    bool          isWinOrLose() const;
-    Direction     getExitDir() const;
-    unsigned char getFocus() const;
-    CombatMap *   getMap() const;
-    Creature *    getCreature() const;
-    PartyMemberVector* getParty();
-    PartyMember*  getCurrentPlayer();
+    // Controller Methods
+    virtual bool keyPressed(int key);
+    virtual bool isCombatController() const { return true; }
 
-    void setExitDir(Direction d);
-    void setCreature(Creature *);
-    void setWinOrLose(bool worl = true);
-    void showCombatMessage(bool show = true);
+    // TurnController Method
+    virtual void finishTurn();
+
+    // Accessor Methods
+    bool isCamping()         const { return camping; }
+    bool isWinOrLose()       const { return winOrLose; }
+    Direction getExitDir()   const { return exitDir; }
+    unsigned char getFocus() const { return focus; }
+    CombatMap* getMap()      const { return map; }
+    const Creature* getCreature() const { return creature; }
+    PartyMemberVector* getParty()   { return &party; }
+    PartyMember* getCurrentPlayer() { return party[focus]; }
+
+    void setExitDir(Direction d) { exitDir = d; }
+    void setCreature(const Creature* m) { creature = m; }
 
     // Methods
-    virtual void init(Creature *m);
-    void initDungeonRoom(int room, Direction from);
+    virtual void beginCombat();
+    virtual void endCombat(bool adjustKarma);
 
-    void applyCreatureTileEffects();
-    virtual void begin();
-    virtual void end(bool adjustKarma);
-    void fillCreatureTable(const Creature *creature);
-    int  initialNumberOfCreatures(const Creature *creature) const;
-    bool isWon() const;
-    bool isLost() const;
-    void moveCreatures();
-    void placeCreatures();
-    void placePartyMembers();
-    bool setActivePlayer(int player);
-    bool attackHit(Creature *attacker, Creature *defender);
+    bool creatureRangedAttack(Creature* attacker, int dir);
+    void movePartyMember(MoveEvent &event);
+
+protected:
     virtual void awardLoot();
 
-    // attack functions
+    void initCreature(const Creature *m);
+    void fillCreatureTable(const Creature *creature);
+    void placeCreatures();
     void attack();
-    bool creatureRangedAttack(Creature* attacker, int dir);
-
-    // Key handlers
-    virtual bool keyPressed(int key);
-
-    virtual void finishTurn();
-    void movePartyMember(MoveEvent &event);
-    virtual void update(Party *party, PartyEvent &event);
 
     // Properties
-protected:
     CombatMap *map;
-
     PartyMemberVector party;
     unsigned char focus;
 
     const Creature *creatureTable[AREA_CREATURES];
-    Creature *creature;
+    const Creature *creature;
 
     bool camping;
     bool forceStandardEncounterSize;
@@ -108,11 +88,21 @@ protected:
     bool winOrLose;
     bool showMessage;
     Direction exitDir;
+    int listenerId;
 
 private:
+    static void combatNotice(int, void*, void*);
     CombatController(const CombatController&);
     const CombatController &operator=(const CombatController&);
 
+    void initDungeonRoom(int room, Direction from);
+    void applyCreatureTileEffects();
+    int  initialNumberOfCreatures(const Creature *creature) const;
+    bool isWon() const;
+    bool isLost() const;
+    void moveCreatures();
+    void placePartyMembers();
+    bool setActivePlayer(int player);
     bool attackAt(const Coords &coords, PartyMember *attacker, int dir, int range, int distance);
     bool returnWeaponToOwner(const Coords &coords, int distance, int dir,
                              const Weapon *weapon);

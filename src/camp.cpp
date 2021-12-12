@@ -2,77 +2,50 @@
  * $Id$
  */
 
-#include "u4.h"
-
 #include "camp.h"
 
-#include "annotation.h"
 #include "city.h"
-#include "combat.h"
 #include "config.h"
 #include "context.h"
 #include "conversation.h"
-#include "event.h"
-#include "game.h"
-#include "location.h"
-#include "map.h"
 #include "mapmgr.h"
-#include "creature.h"
-#include "names.h"
-#include "object.h"
-#include "person.h"
-#include "player.h"
 #include "screen.h"
 #include "settings.h"
-#include "sound.h"
-#include "stats.h"
 #include "tileset.h"
-#include "utils.h"
 #include "xu4.h"
 
 
-#define CAMP_FADE_OUT_TIME  1000
-#define CAMP_FADE_IN_TIME   0
+#define CAMP_FADE_OUT_TIME  1500
+#define CAMP_FADE_IN_TIME    500
 #define INN_FADE_OUT_TIME   1000
 #define INN_FADE_IN_TIME    5000
 
 
-void campTimer(void *data);
-void campEnd(void);
-int campHeal(HealType heal_type);
-void innTimer(void *data);
-
 CampController::CampController() {
-    MapId id;
-
     /* setup camp (possible, but not for-sure combat situation */
-    if (c->location->context & CTX_DUNGEON)
-        id = MAP_CAMP_DNG;
-    else
-        id = MAP_CAMP_CON;
-
+    MapId id = (c->location->context & CTX_DUNGEON) ? MAP_CAMP_DNG
+                                                    : MAP_CAMP_CON;
     map = getCombatMap(xu4.config->map(id));
     xu4.game->setMap(map, true, NULL, this);
-}
 
-void CampController::init(Creature *m) {
-    CombatController::init(m);
     camping = true;
+    initCreature(NULL);
 }
 
-void CampController::begin() {
+void CampController::beginCombat() {
     // make sure everyone's asleep
     for (int i = 0; i < c->party->size(); i++)
         c->party->member(i)->putToSleep();
 
-    CombatController::begin();
+    CombatController::beginCombat();
 
     musicFadeOut(1000);
 
     screenMessage("Resting...\n");
     screenDisableCursor();
 
-    EventHandler::wait_msecs(xu4.settings->campTime * 1000);
+    if (EventHandler::wait_msecs(xu4.settings->campTime * 1000))
+        return;
 
     screenEnableCursor();
 
@@ -106,18 +79,17 @@ void CampController::begin() {
         screenMessage(healed ? "Party Healed!\n" : "No effect.\n");
         c->saveGame->lastcamp = (c->saveGame->moves / CAMP_HEAL_INTERVAL) & 0xffff;
 
-        xu4.eventHandler->popController();
+        xu4.eventHandler->popController();  // Auto deleted.
         xu4.game->exitToParentMap();
         musicFadeIn(CAMP_FADE_IN_TIME, true);
-        delete this;
     }
 }
 
-void CampController::end(bool adjustKarma) {
+void CampController::endCombat(bool adjustKarma) {
     // wake everyone up!
     for (int i = 0; i < c->party->size(); i++)
         c->party->member(i)->wakeUp();
-    CombatController::end(adjustKarma);
+    CombatController::endCombat(adjustKarma);
 }
 
 bool CampController::heal() {
@@ -134,7 +106,6 @@ bool CampController::heal() {
 }
 
 InnController::InnController() {
-    map = NULL;
     /*
      * Normally in cities, only one opponent per encounter; inn's
      * override this to get the regular encounter size.
@@ -142,7 +113,7 @@ InnController::InnController() {
     forceStandardEncounterSize = true;
 }
 
-void InnController::begin() {
+void InnController::beginCombat() {
     /* first, show the avatar before sleeping */
     gameUpdateScreen();
 
@@ -159,7 +130,8 @@ void InnController::begin() {
 
     screenDisableCursor();
 
-    EventHandler::wait_msecs(xu4.settings->innTime * 1000);
+    if (EventHandler::wait_msecs(xu4.settings->innTime * 1000))
+        return;
 
     screenEnableCursor();
 
@@ -224,20 +196,20 @@ void InnController::maybeMeetIsaac()
                  i++) {
                 Person *p = dynamic_cast<Person*>(*i);
                 if (p && p->getName() == "Isaac") {
-                    p->setCoords(coords);
+                    p->updateCoords(coords);
                     return;
                 }
             }
 
             // Otherwise, we need to create Isaac
             Person *Isaac;
-            Isaac = new Person(xu4.config->creature(GHOST_ID)->getTile());
+            Isaac = new Person(xu4.config->creature(GHOST_ID)->tile);
 
-            Isaac->setMovementBehavior(MOVEMENT_WANDER);
+            Isaac->movement = MOVEMENT_WANDER;
 
             Isaac->setDialogue(city->extraDialogues[0]);
             Isaac->getStart() = coords;
-            Isaac->setPrevTile(Isaac->getTile());
+            Isaac->prevTile = Isaac->tile;
 
             // Add Isaac near the Avatar
             city->addPerson(Isaac);
@@ -250,13 +222,13 @@ void InnController::maybeAmbush()
     if (xu4.settings->innAlwaysCombat || (xu4_random(8) == 0)) {
         MapId mapid;
         Creature *creature;
-        bool showMessage = true;
 
         /* Rats seem much more rare than meeting rogues in the streets */
         if (xu4_random(4) == 0) {
             /* Rats! */
             mapid = MAP_BRICK_CON;
             creature = c->location->map->addCreature(xu4.config->creature(RAT_ID), c->location->coords);
+            showMessage = true;
         } else {
             /* While strolling down the street, attacked by rogues! */
             mapid = MAP_INN_CON;
@@ -268,9 +240,8 @@ void InnController::maybeAmbush()
         map = getCombatMap(xu4.config->map(mapid));
         xu4.game->setMap(map, true, NULL, this);
 
-        init(creature);
-        showCombatMessage(showMessage);
-        CombatController::begin();
+        initCreature(creature);
+        CombatController::beginCombat();
     }
 }
 

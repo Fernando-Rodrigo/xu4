@@ -3,7 +3,7 @@
 
 if [ ! -s project.tar.gz ]; then
 	sed -i "s/KR-1.0/DR-$(git rev-parse --short HEAD)/" project.b
-	copr -a -t mingw
+	copr -a -t mingw use_gl:true gpu_render:true
 fi
 
 
@@ -12,56 +12,82 @@ SCRIPT=build-$TIME
 ID=${SCRIPT}
 HDIR=/tmp
 CDIR=/tmp
-WSM=../workshop/mingw-build
-WSL=../workshop/linux-build
+ARC_DIR=/tmp/xu4
+SDK_DIR=dist/sdk
 
-if [ "$1" == "win" ]; then
-	if [ ! -d ${WSM} ]; then
-		echo "Library archive ${WSM} not found!"
-		exit
-	fi
+if [ ! -d ${SDK_DIR} ]; then
+	echo "Library archive ${SDK_DIR} not found!"
+	echo "Run \"make -C dist cbuild-sdks\""
+	exit
+fi
+
+clean_dir () {
+	if [ -d "$1" ]; then rm -rf "$1"/*; else mkdir -p "$1"; fi
+}
+
+case $1 in
+windows)
 	echo '
   unzip /tmp/allegro-x86_64-w64-mingw32-gcc-10.2.0-posix-seh-static-5.2.7.0.zip
   mv allegro usr
-  unzip /tmp/boron-x86_64-w64-mingw32-static-2.0.6.zip
+  unzip /tmp/boron-x86_64-w64-mingw32-static-2.0.7.zip
   mkdir u4
   cd u4
   tar xf /tmp/project.tar.gz
-  copr -t mingw use_gl:false make_util:false
+  copr -t mingw use_gl:true make_util:false
 ' >$HDIR/${SCRIPT}
 
 	podman run -d -it --name=$ID xu4/f33-mingw:1.0 /bin/bash || exit
-	podman cp ${WSM}/allegro-x86_64-w64-mingw32-gcc-10.2.0-posix-seh-static-5.2.7.0.zip $ID:$CDIR
-	podman cp ${WSM}/boron-x86_64-w64-mingw32-static-2.0.6.zip $ID:$CDIR
+	podman cp ${SDK_DIR}/allegro-x86_64-w64-mingw32-gcc-10.2.0-posix-seh-static-5.2.7.0.zip $ID:$CDIR
+	podman cp ${SDK_DIR}/boron-x86_64-w64-mingw32-static-2.0.7.zip $ID:$CDIR
 	podman cp project.tar.gz $ID:$CDIR
 	podman cp $HDIR/${SCRIPT} $ID:$CDIR/${SCRIPT}
 	podman exec -it -u build $ID /bin/bash $CDIR/${SCRIPT}
-	podman cp $ID:/home/build/u4/u4.exe /tmp/u4.exe-$TIME
+	podman cp $ID:/home/build/u4/xu4.exe /tmp/xu4.exe-$TIME || exit
 
 	# Build zip archive.
 	if [ "$2" != "-b" ]; then
-		mkdir -p /tmp/xu4
-		FN=`readlink -f ${WSM}/allegro-dll.tar.bz2`
-		tar xf $FN -C /tmp/xu4
-		cp /tmp/u4.exe-$TIME /tmp/xu4/u4.exe
-		cd /tmp; zip -r xu4-win32.zip xu4
+		clean_dir ${ARC_DIR}
+		FN=`readlink -f ${SDK_DIR}/allegro-dll.tar.bz2`
+		tar xf $FN -C ${ARC_DIR}
+		cp /tmp/xu4.exe-$TIME ${ARC_DIR}/xu4.exe
+		cp u4.mod ${ARC_DIR}
+		cd ${ARC_DIR%/*}; zip -r xu4-win32.zip ${ARC_DIR##*/}
 	fi
-else
+	;;
+
+linux)
 	echo '
-  tar xjf /tmp/boron-x86_64-static-2.0.6.tar.bz2
+  tar xjf /tmp/boron-x86_64-static-2.0.7.tar.bz2
   mkdir u4
   cd u4
   tar xf /tmp/project.tar.gz
-  copr use_gl:false make_util:false boron_sdk:%../boron
+  copr use_gl:true make_util:false boron_sdk:%../boron
 ' >$HDIR/${SCRIPT}
 
 	podman run -d -it --name=$ID xu4/f33-gcc:1.0 /bin/bash || exit
-	podman cp ${WSL}/boron-x86_64-static-2.0.6.tar.bz2 $ID:$CDIR
+	podman cp ${SDK_DIR}/boron-x86_64-static-2.0.7.tar.bz2 $ID:$CDIR
 	podman cp project.tar.gz $ID:$CDIR
 	podman cp $HDIR/${SCRIPT} $ID:$CDIR/${SCRIPT}
 	podman exec -it $ID /bin/bash $CDIR/${SCRIPT}
-	podman cp $ID:/home/build/u4/u4 /tmp/u4-$TIME
-fi
+	podman cp $ID:/home/build/u4/xu4 /tmp/xu4-$TIME || exit
+
+	# Build archive.
+	if [ "$2" != "-b" ]; then
+		clean_dir ${ARC_DIR}
+		cp /tmp/xu4-$TIME ${ARC_DIR}/xu4
+		cp u4.mod ${ARC_DIR}
+		cp dist/README.linux-dr ${ARC_DIR}/README
+		tar czf /tmp/xu4-linux.tar.gz -C ${ARC_DIR%/*} ${ARC_DIR##*/}
+	fi
+	;;
+
+*)
+	echo "Usage: $0 {linux|windows} [-b]"
+	echo -e '\nOptions:'
+	echo '  -b    Build binary only; do not create archive.'
+	exit 1
+esac
 
 echo "$SCRIPT done!"
 podman stop $ID

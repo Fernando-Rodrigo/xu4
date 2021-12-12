@@ -1,5 +1,5 @@
 NULL=
-MAIN=u4$(EXEEXT)
+MAIN=xu4$(EXEEXT)
 
 VERSION=1.1svn
 
@@ -7,6 +7,7 @@ CSRCS=\
         anim.c \
         lzw/hash.c \
         lzw/lzw.c \
+        support/notify.c \
         unzip.c \
         $(NULL)
 
@@ -50,8 +51,8 @@ CXXSRCS=\
         movement.cpp \
         names.cpp \
         object.cpp \
+        party.cpp \
         person.cpp \
-        player.cpp \
         portal.cpp \
         progress_bar.cpp \
         rle.cpp \
@@ -69,17 +70,16 @@ CXXSRCS=\
         tileanim.cpp \
         tileset.cpp \
         tileview.cpp \
-        u4.cpp \
         u4file.cpp \
         utils.cpp \
         view.cpp \
+        xu4.cpp \
         lzw/u4decode.cpp \
         lzw/u6decode.cpp \
-        support/SymbolTable.cpp \
         $(NULL)
 
 ifeq ($(CONF),xml)
-	CXXSRCS+=config.cpp script.cpp xml.cpp
+	CXXSRCS+=config.cpp script_xml.cpp xml.cpp support/SymbolTable.cpp
 else
 	CSRCS+=support/cdi.c
 	CXXSRCS+=config_boron.cpp

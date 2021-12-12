@@ -18,16 +18,21 @@
  */
 
 #include "context.h"
-#include "player.h"
+#include "party.h"
 #include "stats.h"
 
 Context::Context()
-    : party(NULL), saveGame(NULL), location(NULL), stats(NULL), aura(NULL) {
+    : party(NULL), saveGame(NULL), location(NULL), stats(NULL) {
 }
 
 Context::~Context() {
-    delete party;
-    delete location;
+    delete party;   // Delete before locations so that removeFromMaps() works.
+
+    if (location) {
+        while (location->prev != NULL)
+            locationFree(&location);
+        delete location;
+    }
+
     delete stats;
-    delete aura;
 }

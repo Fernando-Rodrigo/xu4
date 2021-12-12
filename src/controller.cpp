@@ -6,7 +6,11 @@
 #include "event.h"
 #include "xu4.h"
 
-Controller::Controller(int timerInterval) {
+/**
+ * \param timerInterval     The timerFired method will be called if this value
+ *                          is non-zero.
+ */
+Controller::Controller(short timerInterval) : autoDelete(false) {
     this->timerInterval = timerInterval;
 }
 
@@ -26,9 +30,21 @@ bool Controller::notifyKeyPressed(int key) {
     return processed;
 }
 
-int Controller::getTimerInterval() {
-    return timerInterval;
+/**
+ * Perform any subclass setup before a controller becomes active.
+ *
+ * Return true if the controller should be run.
+ */
+bool Controller::present() {
+    return true;
 }
+
+/**
+ * Perform any subclass cleanup after a controller has run.
+ *
+ * The conclude method is invoked only if present returned true.
+ */
+void Controller::conclude() {}
 
 /**
  * The keyboard input handler for a controller.
@@ -44,6 +60,9 @@ bool Controller::keyPressed(int key) {
  * will be called every <interval> 1/4 seconds.
  */
 void Controller::timerFired() {
+#ifdef DEBUG
+    printf("Unused Controller::timerFired! %p\n", this);
+#endif
 }
 
 /**

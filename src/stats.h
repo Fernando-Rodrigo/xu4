@@ -6,18 +6,10 @@
 #define STATS_H
 
 #include <string>
-#include "observable.h"
-#include "observer.h"
 #include "menu.h"
 #include "textview.h"
 
-struct SaveGame;
-class Aura;
 class Ingredients;
-class Menu;
-class MenuEvent;
-class Party;
-class PartyEvent;
 
 using std::string;
 
@@ -45,9 +37,10 @@ enum StatsView {
     MIX_REAGENTS
 };
 
-class StatsArea : public Observer<Aura *>, public Observer<Party *, PartyEvent &>, public Observer<Menu *, MenuEvent &>, public Observable<StatsArea *, string> {
+class StatsArea {
 public:
     StatsArea();
+    ~StatsArea();
 
     void setView(StatsView view);
 
@@ -55,9 +48,6 @@ public:
     void prevItem();
     void nextItem();
     void update(bool avatarOnly = false);
-    virtual void update(Aura *aura);
-    virtual void update(Party *party, PartyEvent &event)    {update(); /* do a full update */}
-    virtual void update(Menu *menu, MenuEvent &event)       {update(); /* do a full update */}
     void highlightPlayer(int player);
     void redraw();
 
@@ -67,6 +57,7 @@ public:
     Menu *getReagentsMenu() { return &reagentsMixMenu; }
 
 private:
+    static void statsNotice(int, void*, void*);
     void showPartyView(bool avatarOnly);
     void showPlayerDetails();
     void showWeapons();
@@ -84,6 +75,7 @@ private:
     StatsView view;
 
     Menu reagentsMixMenu;
+    int listenerId;
 };
 
 /**

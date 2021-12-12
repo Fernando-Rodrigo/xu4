@@ -2,37 +2,26 @@
  * $Id$
  */
 
-#include <cctype>
-#include <string>
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
-#include "u4.h"
-
 #include "person.h"
 
-#include "city.h"
 #include "context.h"
 #include "conversation.h"
 #include "debug.h"
-#include "event.h"
 #include "game.h"   // Included for ReadPlayerController
-#include "location.h"
-#include "names.h"
-#include "player.h"
-#include "savegame.h"
+#include "party.h"
 #include "settings.h"
-#include "stats.h"
-#include "types.h"
-#include "u4file.h"
-#include "utils.h"
+#include "u4.h"
 #include "xu4.h"
 
 #ifdef USE_BORON
 #include "config.h"
 #include <boron/boron.h>
 #else
-#include "script.h"
+#include "script_xml.h"
 #endif
 
 #ifdef IOS
@@ -104,7 +93,7 @@ Person::Person(const MapTile& tile) :
     Creature(Creature::getByTile(tile)),
     start(0, 0)
 {
-    setType(Object::PERSON);
+    objType = Object::PERSON;
     dialogue = NULL;
     npcType = NPC_EMPTY;
 }
@@ -178,80 +167,7 @@ list<string> Person::getConversationText(Conversation *cnv, const char *inquiry)
          * We aren't currently running a script, load the appropriate one!
          */
         if (cnv->state == Conversation::INTRO) {
-            // unload the previous script if it wasn't already unloaded
-            if (script->getState() != Script::STATE_UNLOADED)
-                script->unload();
-            script->load("vendorScript.xml", ids[npcType - NPC_VENDOR_WEAPONS], "vendor", c->location->map->getName());
-            script->run("intro");
-#ifdef IOS
-            U4IOS::IOSConversationChoiceHelper choiceDialog;
-#endif
-            while (script->getState() != Script::STATE_DONE) {
-                // Gather input for the script
-                if (script->getState() == Script::STATE_INPUT) {
-                    switch(script->getInputType()) {
-                    case Script::INPUT_CHOICE: {
-                        const string &choices = script->getChoices();
-                        // Get choice
-#ifdef IOS
-                        choiceDialog.updateChoices(choices, script->getTarget(), npcType);
-#endif
-                        char val = ReadChoiceController::get(choices);
-                        if (isspace(val) || val == '\033')
-                            script->unsetVar(script->getInputName());
-                        else {
-                            string s_val;
-                            s_val.resize(1);
-                            s_val[0] = val;
-                            script->setVar(script->getInputName(), s_val);
-                        }
-                    } break;
-
-                    case Script::INPUT_KEYPRESS:
-                        ReadChoiceController::get(" \015\033");
-                        break;
-
-                    case Script::INPUT_NUMBER: {
-#ifdef IOS
-                        U4IOS::IOSConversationHelper ipadNumberInput;
-                        ipadNumberInput.beginConversation(U4IOS::UIKeyboardTypeNumberPad, "Amount?");
-#endif
-                        int val = ReadIntController::get(script->getInputMaxLen(), TEXT_AREA_X + c->col, TEXT_AREA_Y + c->line);
-                        script->setVar(script->getInputName(), val);
-                    } break;
-
-                    case Script::INPUT_STRING: {
-#ifdef IOS
-                        U4IOS::IOSConversationHelper ipadNumberInput;
-                        ipadNumberInput.beginConversation(U4IOS::UIKeyboardTypeDefault);
-#endif
-                        string str = ReadStringController::get(script->getInputMaxLen(), TEXT_AREA_X + c->col, TEXT_AREA_Y + c->line);
-                        if (str.size()) {
-                            lowercase(str);
-                            script->setVar(script->getInputName(), str);
-                        }
-                        else script->unsetVar(script->getInputName());
-                    } break;
-
-                    case Script::INPUT_PLAYER: {
-                        ReadPlayerController getPlayerCtrl;
-                        xu4.eventHandler->pushController(&getPlayerCtrl);
-                        int player = getPlayerCtrl.waitFor();
-                        if (player != -1) {
-                            string player_str = xu4_to_string(player+1);
-                            script->setVar(script->getInputName(), player_str);
-                        }
-                        else script->unsetVar(script->getInputName());
-                    } break;
-
-                    default: break;
-                    }
-
-                    // Continue running the script!
-                    c->line++;
-                    script->_continue();
-                }
-            }
+            script->talkToVendor(ids[npcType - NPC_VENDOR_WEAPONS]);
         }
 
         // Unload the script

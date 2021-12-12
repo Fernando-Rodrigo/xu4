@@ -2,28 +2,16 @@
  * $Id$
  */
 
-#include "u4.h"
+#include <cstring>
 
 #include "spell.h"
 
-#include <cstring>
-#include "annotation.h"
-#include "combat.h"
 #include "config.h"
-#include "context.h"
 #include "debug.h"
-#include "direction.h"
 #include "dungeon.h"
-#include "event.h"
-#include "game.h"
-#include "location.h"
-#include "map.h"
 #include "mapmgr.h"
-#include "creature.h"
-#include "player.h"
 #include "screen.h"
 #include "settings.h"
-#include "tile.h"
 #include "tileset.h"
 #include "utils.h"
 #include "xu4.h"
@@ -300,7 +288,7 @@ bool spellCast(unsigned int spell, int character, int param, SpellCastError *err
         return false;
 
     // If there's a negate magic aura, spells fail!
-    if (*c->aura == Aura::NEGATE) {
+    if (c->aura.getType() == Aura::NEGATE) {
         *error = CASTERR_FAILED;
         return false;
     }
@@ -345,7 +333,7 @@ void spellMagicAttack(Symbol tilename, Direction dir, int minDamage, int maxDama
         xu4_random((maxDamage + 1) - minDamage) + minDamage :
         maxDamage;
 
-    vector<Coords> path = gameGetDirectionalActionPath(MASK_DIR(dir), MASK_DIR_ALL, (*party)[controller->getFocus()]->getCoords(),
+    vector<Coords> path = gameGetDirectionalActionPath(MASK_DIR(dir), MASK_DIR_ALL, (*party)[controller->getFocus()]->coords,
                                                        1, 11, Tile::canAttackOverTile, false);
     for (vector<Coords>::iterator i = path.begin(); i != path.end(); i++) {
         if (spellMagicAttackAt(*i, tile, attackDamage))
@@ -444,7 +432,7 @@ static int spellBlink(int dir) {
 static int spellCure(int player) {
     ASSERT(player < 8, "player out of range: %d", player);
 
-    GameController::flashTile(c->party->member(player)->getCoords(), Tile::sym.wisp, 1);
+    GameController::flashTile(c->party->member(player)->coords, Tile::sym.wisp, 1);
     return c->party->member(player)->heal(HT_CURE);
 }
 
@@ -471,16 +459,17 @@ static int spellDispel(int dir) {
      * (or other unwalkable surface).  So, we need to provide a valid replacement
      * annotation to fill in the gap :)
      */
-    AnnotationMgr* annot = loc->map->annotations;
-    Annotation::List a = annot->allAt(fpos);
+    AnnotationList& annot = loc->map->annotations;
+    AnnotationList a = annot.allAt(fpos);
     if (a.size() > 0) {
-        Annotation::List::iterator i;
+        AnnotationList::iterator i;
         for (i = a.begin(); i != a.end(); i++) {
-            if (i->getTile().getTileType()->canDispel()) {
+            tile = i->tile.getTileType();
+            if (tile->canDispel()) {
                 // get a replacement tile for the field
-                MapTile newTile(loc->getReplacementTile(fpos, i->getTile().getTileType()));
-                annot->remove(*i);
-                annot->add(fpos, newTile, false, true);
+                MapTile newTile(loc->getReplacementTile(fpos, tile));
+                annot.remove(*i);
+                annot.add(fpos, newTile, false, true);
                 return 1;
             }
         }
@@ -535,18 +524,18 @@ static int spellEField(int param) {
         if (!tile->isWalkable()) return 0;
 
         /* Get rid of old field, if any */
-        Annotation::List a = c->location->map->annotations->allAt(coords);
+        AnnotationList a = c->location->map->annotations.allAt(coords);
         if (a.size() > 0) {
-            Annotation::List::iterator i;
+            AnnotationList::iterator i;
             for (i = a.begin(); i != a.end(); i++) {
-                if (i->getTile().getTileType()->canDispel())
-                    c->location->map->annotations->remove(*i);
+                if (i->tile.getTileType()->canDispel())
+                    c->location->map->annotations.remove(*i);
             }
         }
 
         MapTile fieldTile;
         fieldTile = c->location->map->tileset->getByName(fsym)->getId();
-        c->location->map->annotations->add(coords, fieldTile);
+        c->location->map->annotations.add(coords, fieldTile);
     }
 
     return 1;
@@ -572,7 +561,7 @@ static int spellGate(int phase) {
 static int spellHeal(int player) {
     ASSERT(player < 8, "player out of range: %d", player);
 
-    GameController::flashTile(c->party->member(player)->getCoords(), Tile::sym.wisp, 1);
+    GameController::flashTile(c->party->member(player)->coords, Tile::sym.wisp, 1);
     c->party->member(player)->heal(HT_HEAL);
     return 1;
 }
@@ -583,7 +572,7 @@ static int spellIceball(int dir) {
 }
 
 static int spellJinx(int unused) {
-    c->aura->set(Aura::JINX, 10);
+    c->aura.set(Aura::JINX, 10);
     return 1;
 }
 
@@ -603,7 +592,7 @@ static int spellMMissle(int dir) {
 }
 
 static int spellNegate(int unused) {
-    c->aura->set(Aura::NEGATE, 10);
+    c->aura.set(Aura::NEGATE, 10);
     return 1;
 }
 
@@ -613,7 +602,7 @@ static int spellOpen(int unused) {
 }
 
 static int spellProtect(int unused) {
-    c->aura->set(Aura::PROTECTION, 10);
+    c->aura.set(Aura::PROTECTION, 10);
     return 1;
 }
 
@@ -624,7 +613,7 @@ static int spellRez(int player) {
 }
 
 static int spellQuick(int unused) {
-    c->aura->set(Aura::QUICKNESS, 10);
+    c->aura.set(Aura::QUICKNESS, 10);
     return 1;
 }
 
@@ -637,7 +626,7 @@ static int spellSleep(int unused) {
 
     for (i = creatures.begin(); i != creatures.end(); i++) {
         Creature *m = *i;
-        Coords coords = m->getCoords();
+        const Coords& coords = m->coords;
         GameController::flashTile(coords, Tile::sym.wisp, 1);
         if ((m->getResists() != EFFECT_SLEEP) &&
             xu4_random(0xFF) >= m->getHp())
@@ -663,7 +652,7 @@ static int spellTremor(int unused) {
         Creature *m = *i;
 
 
-        Coords coords = m->getCoords();
+        const Coords& coords = m->coords;
         //GameController::flashTile(coords, "rocks", 1);
 
         /* creatures with over 192 hp are unaffected */

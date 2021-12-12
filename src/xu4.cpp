@@ -1,5 +1,5 @@
 /*
- * $Id$
+ * xu4.cpp
  */
 
 /** \mainpage xu4 Main Page
@@ -9,27 +9,22 @@
  * intro stuff goes here...
  */
 
-#include "xu4.h"
-#include "u4.h"
 #include <cstring>
+#include <ctime>
+#include "xu4.h"
 #include "config.h"
 #include "debug.h"
 #include "error.h"
-#include "event.h"
 #include "game.h"
-#include "imagemgr.h"
 #include "intro.h"
-#include "person.h"
 #include "progress_bar.h"
 #include "screen.h"
 #include "settings.h"
 #include "sound.h"
-#include "tileset.h"
 #include "utils.h"
 
 #if defined(MACOSX)
 #include "macosx/osxinit.h"
-#include "SDL.h"
 #endif
 
 #ifdef DEBUG
@@ -44,7 +39,9 @@ enum OptionsFlag {
     OPT_NO_INTRO   = 2,
     OPT_NO_AUDIO   = 4,
     OPT_VERBOSE    = 8,
-    OPT_TEST_SAVE  = 0x10
+    OPT_RECORD     = 0x10,
+    OPT_REPLAY     = 0x20,
+    OPT_TEST_SAVE  = 0x80
 };
 
 struct Options {
@@ -53,6 +50,7 @@ struct Options {
     uint32_t scale;
     uint8_t  filter;
     const char* profile;
+    const char* recordFile;
 };
 
 #define strEqual(A,B)       (strcmp(A,B) == 0)
@@ -112,19 +110,38 @@ int parseOptions(Options* opt, int argc, char** argv) {
             "  -f, --fullscreen        Run in fullscreen mode.\n"
             "  -h, --help              Print this message and quit.\n"
             "  -i, --skip-intro        Skip the intro. and load the last saved game.\n"
-            "  -p <string>,\n"
-            "      --profile <string>  Use another set of settings and save files.\n"
+            "  -p, --profile <string>  Use another set of settings and save files.\n"
             "  -q, --quiet             Disable audio.\n"
-            "  -s <int>,\n"
-            "      --scale <int>       Specify scaling factor (1-5).\n"
+            "  -s, --scale <int>       Specify scaling factor (1-5).\n"
             "  -v, --verbose           Enable verbose console output.\n"
-
+#ifdef DEBUG
+            "\nDEBUG Options:\n"
+            "  -c, --capture <file>    Record user input.\n"
+            "  -r, --replay <file>     Play using recorded input.\n"
+            "      --test-save         Save to /tmp/xu4/ and quit.\n"
+#endif
             "\nFilters: point, 2xBi, 2xSaI, Scale2x\n"
             "\nHomepage: http://xu4.sourceforge.com\n");
 
             return 0;
         }
 #ifdef DEBUG
+        else if (strEqualAlt(argv[i], "-c", "--capture"))
+        {
+            if (++i >= argc)
+                goto missing_value;
+            opt->recordFile = argv[i];
+            opt->flags |= OPT_RECORD;
+            opt->used  |= OPT_RECORD;
+        }
+        else if (strEqualAlt(argv[i], "-r", "--replay"))
+        {
+            if (++i >= argc)
+                goto missing_value;
+            opt->recordFile = argv[i];
+            opt->flags |= OPT_REPLAY;
+            opt->used  |= OPT_REPLAY;
+        }
         else if (strEqual(argv[i], "--test-save"))
         {
             opt->flags |= OPT_TEST_SAVE;
@@ -144,7 +161,14 @@ missing_value:
 }
 
 
+#ifdef DEBUG
+void servicesFree(XU4GameServices*);
+#endif
+
 void servicesInit(XU4GameServices* gs, Options* opt) {
+    if (opt->flags & OPT_VERBOSE)
+        verbose = true;
+
     if (!u4fsetup())
     {
         errorFatal( "xu4 requires the PC version of Ultima IV to be present.\n"
@@ -152,6 +176,9 @@ void servicesInit(XU4GameServices* gs, Options* opt) {
             "directory as the xu4 executable.\n"
             "\nFor more information visit http://xu4.sourceforge.net/faq.html\n");
     }
+
+    /* Setup the message bus early to make it available to other services. */
+    notify_init(&gs->notifyBus, 8);
 
     /* initialize the settings */
     gs->settings = new Settings;
@@ -165,12 +192,8 @@ void servicesInit(XU4GameServices* gs, Options* opt) {
     if (opt->filter)
         gs->settings->filter = opt->filter;
 
-    if (opt->flags & OPT_VERBOSE)
-        verbose = true;
-
     Debug::initGlobal("debug/global.txt");
 
-    xu4_srandom();
     gs->config = configInit();
     screenInit();
     Tile::initSymbols(gs->config);
@@ -178,7 +201,27 @@ void servicesInit(XU4GameServices* gs, Options* opt) {
     if (! (opt->flags & OPT_NO_AUDIO))
         soundInit();
 
-    gs->eventHandler = new EventHandler(1000/gs->settings->gameCyclesPerSecond);
+    gs->eventHandler = new EventHandler(1000/gs->settings->gameCyclesPerSecond,
+                            1000/gs->settings->screenAnimationFramesPerSecond);
+
+#ifdef DEBUG
+    if (opt->flags & OPT_REPLAY) {
+        uint32_t seed = gs->eventHandler->replay(opt->recordFile);
+        if (! seed) {
+            servicesFree(gs);
+            errorFatal("Cannot open recorded input from %s", opt->recordFile);
+        }
+        xu4_srandom(seed);
+    } else if (opt->flags & OPT_RECORD) {
+        uint32_t seed = time(NULL);
+        if (! gs->eventHandler->beginRecording(opt->recordFile, seed)) {
+            servicesFree(gs);
+            errorFatal("Cannot open recording file %s", opt->recordFile);
+        }
+        xu4_srandom(seed);
+    } else
+#endif
+        xu4_srandom(time(NULL));
 
     gs->stage = (opt->flags & OPT_NO_INTRO) ? StagePlay : StageIntro;
 }
@@ -192,6 +235,7 @@ void servicesFree(XU4GameServices* gs) {
     screenDelete();
     configFree(gs->config);
     delete gs->settings;
+    notify_free(&gs->notifyBus);
     u4fcleanup();
 }
 
@@ -217,11 +261,18 @@ int main(int argc, char *argv[]) {
 
 #ifdef DEBUG
     if (opt.flags & OPT_TEST_SAVE) {
+        int status;
         xu4.game = new GameController();
-        xu4.game->init();
-        gameSave("/tmp/xu4/");
+        if (xu4.game->initContext()) {
+            gameSave("/tmp/xu4/");
+            status = 0;
+        } else {
+            printf("initContext failed!\n");
+            status = 1;
+        }
+        xu4.stage = StageExitGame;
         servicesFree(&xu4);
-        return 0;
+        return status;
     }
 #endif
     }
@@ -242,39 +293,15 @@ int main(int argc, char *argv[]) {
     while( xu4.stage != StageExitGame )
     {
         if( xu4.stage == StageIntro ) {
+            /* Show the introduction */
             if (! xu4.intro)
                 xu4.intro = new IntroController;
-
-            /* Show the introduction */
-            xu4.intro->init();
-            xu4.intro->preloadMap();
-
             xu4.eventHandler->runController(xu4.intro);
-
-            xu4.intro->deleteIntro();
         } else {
-
             /* Play the game! */
-
-            if (! xu4.game) {
+            if (! xu4.game)
                 xu4.game = new GameController();
-                if (! xu4.game->init())
-                    continue;
-            } else if (xu4.intro && xu4.intro->hasInitiatedNewGame()) {
-                //Loads current savegame
-                if (! xu4.game->init())
-                    continue;
-            } else {
-                //Inits screen stuff without renewing game
-                xu4.game->initScreen();
-                xu4.game->initScreenWithoutReloadingState();
-                xu4.game->mapArea.reinit();
-            }
-
             xu4.eventHandler->runController(xu4.game);
-
-            xu4.eventHandler->popMouseAreaSet();
-            screenSetMouseCursor(MC_DEFAULT);
         }
     }
 

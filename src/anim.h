@@ -35,6 +35,8 @@ void   anim_clear(Animator*);
 void   anim_advance(Animator*, float seconds);
 AnimId anim_startCycleRandomI(Animator* an, float dur, int loops, uint32_t fid,
                               int start, int end, int chance);
+AnimId anim_startLinearF2(Animator* an, float dur, uint32_t fid,
+                          float* start, float* end);
 void   anim_setState(Animator*, AnimId, int animState);
 int    anim_valueI(const Animator*, AnimId);
 float* anim_valueF2(const Animator*, AnimId);

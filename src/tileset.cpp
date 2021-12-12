@@ -6,10 +6,7 @@
 #include "tileset.h"
 
 #include "error.h"
-#include "config.h"
 #include "imagemgr.h"
-#include "settings.h"
-#include "tile.h"
 #include "tileanim.h"
 #include "xu4.h"
 
@@ -30,11 +27,14 @@ void Tileset::loadImages() {
         Tile* end  = tile + ts->tileCount;
         TileRenderData* rit = ts->render;
         for (; tile != end; ++rit, ++tile) {
-            rit->scroll = VID_UNSET;
+            rit->animType = -1; //ATYPE_NONE;
+            rit->animData.scroll = 0;   // Initialize animData to zero.
 
             j = info->subImageIndex.find(tile->imageName);
             if (j != info->subImageIndex.end()) {
                 const SubImage* subimage = info->subImages + j->second;
+                tile->w = subimage->width;
+                tile->h = subimage->height;
                 tile->frames = subimage->celCount;
 
                 // Set visual to subimage index.
@@ -45,10 +45,16 @@ void Tileset::loadImages() {
                     const TileAnimTransform* trans = tile->anim->transforms[0];
                     if (trans->animType == ATYPE_SCROLL) {
                         if (trans->var.scroll.vid)
-                            rit->scroll = trans->var.scroll.vid;
+                            rit->animData.scroll = trans->var.scroll.vid;
                         else
-                            rit->scroll = rit->vid;
+                            rit->animData.scroll = rit->vid;
+                    } else if (trans->animType == ATYPE_PIXEL_COLOR) {
+                        // Assuming this a campfire; store center X.
+                        rit->animData.hot[0] = trans->var.pcolor.x +
+                                               (trans->var.pcolor.w+1) / 2;
+                        rit->animData.hot[1] = tile->w;
                     }
+                    rit->animType = trans->animType;
                 }
             } else {
                 rit->vid = VID_UNSET;

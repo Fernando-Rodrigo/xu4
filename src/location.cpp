@@ -8,28 +8,19 @@
 
 #include "location.h"
 
-#include "annotation.h"
 #include "context.h"
 #include "combat.h"
-#include "creature.h"
-#include "event.h"
-#include "game.h"
-#include "map.h"
-#include "object.h"
-#include "savegame.h"
 #include "settings.h"
 #include "tileset.h"
 #include "xu4.h"
 
-Location *locationPush(Location *stack, Location *loc);
-Location *locationPop(Location **stack);
 
 /**
  * Add a new location to the stack, or
  * start a new stack if 'prev' is NULL
  */
 Location::Location(const Coords& coords, Map *map, int viewmode,
-        LocationContext ctx, TurnCompleter *turnCompleter, Location *prev) {
+        LocationContext ctx, TurnController *turnCompleter, Location *prev) {
 
     this->coords = coords;
     this->map = map;
@@ -37,7 +28,19 @@ Location::Location(const Coords& coords, Map *map, int viewmode,
     this->context = ctx;
     this->turnCompleter = turnCompleter;
 
-    locationPush(prev, this);
+    // Push location onto the stack.
+    this->prev = prev;
+}
+
+/**
+ * Pop a location from the stack and free the memory
+ */
+void locationFree(Location **stack) {
+    Location* loc = *stack;
+    *stack = loc->prev;
+    loc->prev = NULL;
+
+    delete loc;
 }
 
 /**
@@ -45,10 +48,8 @@ Location::Location(const Coords& coords, Map *map, int viewmode,
  */
 std::vector<MapTile> Location::tilesAt(const Coords& coords, bool &focus) {
     std::vector<MapTile> tiles;
-    std::list<Annotation *> a = map->annotations->ptrsToAllAt(coords);
-    std::list<Annotation *>::iterator i;
-    Object *obj = map->objectAt(coords);
-    Creature *m = dynamic_cast<Creature *>(obj);
+    const Object *obj = map->objectAt(coords);
+    const Creature *m = dynamic_cast<const Creature *>(obj);
     focus = false;
 
     bool avatar = this->coords == coords;
@@ -70,16 +71,18 @@ std::vector<MapTile> Location::tilesAt(const Coords& coords, bool &focus) {
         tiles.push_back(c->party->getTransport());
 
     /* Add visual-only annotations to the list */
-    for (i = a.begin(); i != a.end(); i++) {
-        if ((*i)->isVisualOnly())
+    std::list<Annotation *> annot = map->annotations.ptrsToAllAt(coords);
+    std::list<Annotation *>::const_iterator i;
+    for (i = annot.begin(); i != annot.end(); i++) {
+        if ((*i)->visualOnly)
         {
-            tiles.push_back((*i)->getTile());
+            tiles.push_back((*i)->tile);
 
             /* If this is the first cover-up annotation,
              * everything underneath it will be invisible,
              * so stop here
              */
-            if ((*i)->isCoverUp())
+            if ((*i)->coverUp)
                 return tiles;
         }
     }
@@ -90,15 +93,15 @@ std::vector<MapTile> Location::tilesAt(const Coords& coords, bool &focus) {
         tiles.push_back(c->party->getTransport());
 
     /* then camouflaged creatures that have a disguise */
-    if (obj && (obj->getType() == Object::CREATURE) &&
-        ! obj->isVisible() && m->getCamouflageTile()) {
-        focus = focus || obj->hasFocus();
+    if (obj && (obj->objType == Object::CREATURE) &&
+        ! obj->visible && m->getCamouflageTile()) {
+        focus = focus || obj->focused;
         tiles.push_back(map->tileset->getByName(m->getCamouflageTile())->getId());
     }
     /* then visible creatures and objects */
-    else if (obj && obj->isVisible()) {
-        focus = focus || obj->hasFocus();
-        MapTile visibleCreatureAndObjectTile = obj->getTile();
+    else if (obj && obj->visible) {
+        focus = focus || obj->focused;
+        MapTile visibleCreatureAndObjectTile = obj->tile;
         //Sleeping creatures and persons have their animation frozen
         if (m && m->isAsleep())
             visibleCreatureAndObjectTile.freezeAnimation = true;
@@ -110,15 +113,15 @@ std::vector<MapTile> Location::tilesAt(const Coords& coords, bool &focus) {
         tiles.push_back(c->party->getTransport());
 
     /* then permanent annotations */
-    for (i = a.begin(); i != a.end(); i++) {
-        if (!(*i)->isVisualOnly()) {
-            tiles.push_back((*i)->getTile());
+    for (i = annot.begin(); i != annot.end(); i++) {
+        if (!(*i)->visualOnly) {
+            tiles.push_back((*i)->tile);
 
             /* If this is the first cover-up annotation,
              * everything underneath it will be invisible,
              * so stop here
              */
-            if ((*i)->isCoverUp())
+            if ((*i)->coverUp)
                 return tiles;
         }
     }
@@ -223,20 +226,21 @@ TileId Location::getReplacementTile(const Coords& atCoords, const Tile * forTile
  *     If in combat - returns the coordinates of party member with focus
  *     If elsewhere - returns the coordinates of the avatar
  */
-int Location::getCurrentPosition(Coords *coords) {
+int Location::getCurrentPosition(Coords* pos) {
     if (context & CTX_COMBAT) {
         CombatController *cc = dynamic_cast<CombatController *>(xu4.eventHandler->getController());
         PartyMemberVector *party = cc->getParty();
-        *coords = (*party)[cc->getFocus()]->getCoords();
+        *pos = (*party)[cc->getFocus()]->coords;
     }
     else
-        *coords = this->coords;
+        *pos = coords;
 
     return 1;
 }
 
 MoveResult Location::move(Direction dir, bool userEvent) {
     MoveEvent event(dir, userEvent);
+    event.location = this;
     switch (map->type) {
 
     case Map::DUNGEON:
@@ -252,34 +256,6 @@ MoveResult Location::move(Direction dir, bool userEvent) {
         break;
     }
 
-    setChanged();
-    notifyObservers(event);
-
+    gs_emitMessage(SENDER_LOCATION, &event);
     return event.result;
-}
-
-
-/**
- * Pop a location from the stack and free the memory
- */
-void locationFree(Location **stack) {
-    delete locationPop(stack);
-}
-
-/**
- * Push a location onto the stack
- */
-Location *locationPush(Location *stack, Location *loc) {
-    loc->prev = stack;
-    return loc;
-}
-
-/**
- * Pop a location off the stack
- */
-Location *locationPop(Location **stack) {
-    Location *loc = *stack;
-    *stack = (*stack)->prev;
-    loc->prev = NULL;
-    return loc;
 }

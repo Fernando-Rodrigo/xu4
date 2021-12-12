@@ -1,5 +1,5 @@
 /*
- * $Id$
+ * game.h
  */
 
 #ifndef GAME_H
@@ -10,21 +10,15 @@
 #include "controller.h"
 #include "event.h"
 #include "map.h"
-#include "observer.h"
 #include "sound.h"
 #include "tileview.h"
 #include "types.h"
 
 using std::vector;
 
-class Map;
 struct Portal;
 class Creature;
-class Location;
 class MoveEvent;
-class Party;
-class PartyEvent;
-class PartyMember;
 
 typedef enum {
     VIEW_NORMAL,
@@ -73,9 +67,9 @@ public:
     bool keyPressed(int key);
 };
 
-class TurnCompleter {
+class TurnController : public Controller {
 public:
-    virtual ~TurnCompleter() {}
+    TurnController(short timerInterval) : Controller(timerInterval) {}
     virtual void finishTurn() = 0;
 };
 
@@ -87,39 +81,37 @@ public:
  *      <li>separate the dungeon specific stuff into another class (subclass?)</li>
  *  </ul>
  */
-class GameController : public Controller, public Observer<Party *, PartyEvent &>, public Observer<Location *, MoveEvent &>,
-    public TurnCompleter {
+class GameController : public TurnController {
 public:
     GameController();
     ~GameController();
 
     /* controller functions */
+    virtual bool present();
+    virtual void conclude();
     virtual bool keyPressed(int key);
     virtual void timerFired();
 
     /* main game functions */
-    bool init();
-    void initScreen();
-    void initScreenWithoutReloadingState();
-    void setMap(Map *map, bool saveLocation, const Portal *portal, TurnCompleter *turnCompleter = NULL);
+    void setMap(Map *map, bool saveLocation, const Portal *portal, TurnController *turnCompleter = NULL);
     int exitToParentMap();
     virtual void finishTurn();
 
-    virtual void update(Party *party, PartyEvent &event);
-    virtual void update(Location *location, MoveEvent &event);
-
-    void initMoons();
+    bool initContext();
     void updateMoons(bool showmoongates);
 
     static void flashTile(const Coords &coords, MapTile tile, int timeFactor);
     static void flashTile(const Coords &coords, Symbol tilename, int timeFactor);
-    static void doScreenAnimationsWhilePausing(int timeFactor);
 
     TileView mapArea;
     bool paused;
     int pausedTimer;
 
 private:
+    static void gameNotice(int, void*, void*);
+    void initScreenWithoutReloadingState();
+    void initMoons();
+
     void avatarMoved(MoveEvent &event);
     void avatarMovedInDungeon(MoveEvent &event);
 
@@ -172,5 +164,8 @@ void gameDamageParty(int minDamage, int maxDamage);
 void gameDamageShip(int minDamage, int maxDamage);
 void gameSetActivePlayer(int player);
 vector<Coords> gameGetDirectionalActionPath(int dirmask, int validDirections, const Coords &origin, int minDistance, int maxDistance, bool (*blockedPredicate)(const Tile *tile), bool includeBlocked);
+
+#define gameStampCommandTime()      c->lastCommandTime = c->commandTimer
+#define gameTimeSinceLastCommand()  ((c->commandTimer - c->lastCommandTime)/1000)
 
 #endif

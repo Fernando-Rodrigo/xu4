@@ -2,27 +2,15 @@
  * combat.cpp
  */
 
-#include <ctime>
-#include "u4.h"
-
 #include "combat.h"
 
-#include "annotation.h"
 #include "config.h"
-#include "context.h"
-#include "creature.h"
 #include "death.h"
 #include "debug.h"
 #include "dungeon.h"
-#include "event.h"
-#include "game.h"
 #include "item.h"
 #include "location.h"
 #include "mapmgr.h"
-#include "movement.h"
-#include "names.h"
-#include "object.h"
-#include "player.h"
 #include "portal.h"
 #include "screen.h"
 #include "settings.h"
@@ -52,48 +40,48 @@ CombatMap *getCombatMap(Map *punknown) {
     else return dynamic_cast<CombatMap*>(m);
 }
 
-/**
- * CombatController class implementation
+void CombatController::engage(MapId mid, const Creature* creatures) {
+    CombatMap* map = getCombatMap(xu4.config->map(mid));
+    CombatController* cc = new CombatController(map);
+    cc->initCreature(creatures);
+    cc->beginCombat();
+}
+
+/*
+ * Engage combat in dungeon room.
  */
-CombatController::CombatController() : map(NULL) {
-    c->party->addObserver(this);
+void CombatController::engageDungeon(Dungeon* dng, int room, Direction from) {
+    dng->currentRoom = room;
+    CombatController* cc = new CombatController(dng->roomMaps[room]);
+    cc->initCreature(NULL);
+    cc->initDungeonRoom(room, from);
+    cc->beginCombat();
 }
 
-CombatController::CombatController(CombatMap *m) : map(m) {
-    xu4.game->setMap(map, true, NULL, this);
-    c->party->addObserver(this);
-}
-
-CombatController::CombatController(MapId id) {
-    map = getCombatMap(xu4.config->map(id));
-    xu4.game->setMap(map, true, NULL, this);
-    c->party->addObserver(this);
+/**
+ * A CombatController is automatically deleted when popped from the
+ * EventHandler controller stack, so it must be created with new.
+ */
+CombatController::CombatController(CombatMap* cmap) : TurnController(0) {
+    setDeleteOnPop();
+    camping = false;
     forceStandardEncounterSize = false;
+    showMessage = true;
+    listenerId = gs_listen(1<<SENDER_PARTY, combatNotice, this);
+
+    map = cmap;
+    if (cmap)
+        xu4.game->setMap(cmap, true, NULL, this);
 }
 
 CombatController::~CombatController() {
-    c->party->deleteObserver(this);
+    gs_unplug(listenerId);
 }
-
-// Accessor Methods
-bool CombatController::isCamping() const                    { return camping; }
-bool CombatController::isWinOrLose() const                  { return winOrLose; }
-Direction CombatController::getExitDir() const              { return exitDir; }
-unsigned char CombatController::getFocus() const            { return focus; }
-CombatMap *CombatController::getMap() const                 { return map; }
-Creature *CombatController::getCreature() const               { return creature; }
-PartyMemberVector *CombatController::getParty()             { return &party; }
-PartyMember* CombatController::getCurrentPlayer()           { return party[focus]; }
-
-void CombatController::setExitDir(Direction d)              { exitDir = d; }
-void CombatController::setCreature(Creature *m)               { creature = m; }
-void CombatController::setWinOrLose(bool worl)              { winOrLose = worl; }
-void CombatController::showCombatMessage(bool show)         { showMessage = show; }
 
 /**
  * Initializes the combat controller with combat information
  */
-void CombatController::init(class Creature *m) {
+void CombatController::initCreature(const Creature *m) {
     int i;
 
     creature = m;
@@ -102,8 +90,6 @@ void CombatController::init(class Creature *m) {
     winOrLose = true;
     map->setDungeonRoom(false);
     map->setAltarRoom(VIRT_NONE);
-    showMessage = true;
-    camping = false;
 
     /* initialize creature info */
     for (i = 0; i < AREA_CREATURES; i++) {
@@ -126,8 +112,6 @@ void CombatController::init(class Creature *m) {
  */
 void CombatController::initDungeonRoom(int room, Direction from) {
     int offset, i;
-    init(NULL);
-
     ASSERT(c->location->prev->context & CTX_DUNGEON, "Error: called initDungeonRoom from non-dungeon context");
     {
         Dungeon *dng = dynamic_cast<Dungeon*>(c->location->prev->map);
@@ -189,7 +173,7 @@ void CombatController::applyCreatureTileEffects() {
 
     for (i = creatures.begin(); i != creatures.end(); i++) {
         Creature *m = *i;
-        TileEffect effect = map->tileTypeAt(m->getCoords(), WITH_GROUND_OBJECTS)->getEffect();
+        TileEffect effect = map->tileTypeAt(m->coords, WITH_GROUND_OBJECTS)->getEffect();
         m->applyTileEffect(map, effect);
     }
 }
@@ -197,7 +181,7 @@ void CombatController::applyCreatureTileEffects() {
 /**
  * Begin combat
  */
-void CombatController::begin() {
+void CombatController::beginCombat() {
     bool partyIsReadyToFight = false;
 
     /* place party members on the map */
@@ -237,7 +221,12 @@ void CombatController::begin() {
     xu4.eventHandler->pushController(this);
 }
 
-void CombatController::end(bool adjustKarma) {
+/*
+ * Transition back to parent map/controller and delete this controller.
+ */
+void CombatController::endCombat(bool adjustKarma) {
+    // Other code paths use autoDelete, but we manually delete below.
+    setDeleteOnPop(false);
     xu4.eventHandler->popController();
 
     /* The party is dead -- start the death sequence */
@@ -248,9 +237,7 @@ void CombatController::end(bool adjustKarma) {
 
         deathStart(5);
     }
-
     else {
-
         /* need to get this here because when we exit to the parent map, all the monsters are cleared */
         bool won = isWon();
 
@@ -453,7 +440,7 @@ void CombatController::placePartyMembers() {
 
     for (i = 0; i < c->party->size(); i++) {
         PartyMember *p = c->party->member(i);
-        p->setFocus(false); // take the focus off of everyone
+        p->focused = false; // take the focus off of everyone
 
         /* don't place dead party members */
         if (p->getStatus() != STAT_DEAD) {
@@ -473,9 +460,9 @@ bool CombatController::setActivePlayer(int player) {
 
     if (p && !p->isDisabled()) {
         if (party[focus])
-            party[focus]->setFocus(false);
+            party[focus]->focused = false;
 
-        p->setFocus();
+        p->focused = true;
         focus = player;
 
         screenMessage("\n%s with %s\n\020", p->getName().c_str(), p->getWeapon()->getName());
@@ -487,7 +474,7 @@ bool CombatController::setActivePlayer(int player) {
 }
 
 void CombatController::awardLoot() {
-    Coords coords = creature->getCoords();
+    const Coords& coords = creature->coords;
     Location* loc = c->location;
     const Tile *ground = loc->map->tileTypeAt(coords, WITHOUT_OBJECTS);
 
@@ -499,22 +486,69 @@ void CombatController::awardLoot() {
         loc->map->addObject(chest, chest, coords);
     }
     /* add a ship if you just defeated a pirate ship */
-    else if (creature->getTile().getTileType()->isPirateShip()) {
+    else if (creature->tile.getTileType()->isPirateShip()) {
         MapTile ship = loc->map->tileset->getByName(Tile::sym.ship)->getId();
-        ship.setDirection(creature->getTile().getDirection());
+        ship.setDirection(creature->tile.getDirection());
         loc->map->addObject(ship, ship, coords);
     }
 }
 
-bool CombatController::attackHit(Creature *attacker, Creature *defender) {
+bool CombatController::attackHit(const Creature* attacker,
+                                 const Creature* defender) {
     ASSERT(attacker != NULL, "attacker must not be NULL");
     ASSERT(defender != NULL, "defender must not be NULL");
 
     int attackValue = xu4_random(0x100) + attacker->getAttackBonus();
-    int defenseValue = defender->getDefense();
-
-    return attackValue > defenseValue;
+    return attackValue > defender->getDefense();
 }
+
+#ifdef GPU_RENDER
+#include <math.h>
+
+static void animateAttack(const vector<Coords>& path, int range, TileId tid) {
+    float vec[4];
+
+    vec[0] = path[0].x;
+    vec[1] = path[0].y;
+    vec[2] = path[range].x;
+    vec[3] = path[range].y;
+
+    float dx = vec[2] - vec[0];
+    float dy = vec[3] - vec[1];
+    float duration = sqrtf(dx*dx + dy*dy) /
+                float(xu4.settings->screenAnimationFramesPerSecond);
+    AnimId move = anim_startLinearF2(&xu4.eventHandler->fxAnim, duration, 0,
+                                     vec, vec + 2);
+
+    int fx = xu4.game->mapArea.showEffect(path[0], tid, move);
+    EventHandler::wait_msecs(duration * 1000.0);
+    xu4.game->mapArea.removeEffect(fx);
+}
+
+enum AttackResult {
+    AR_None,
+    AR_NoTarget,
+    AR_Miss,
+    AR_Hit
+};
+
+static int attackAt2(CombatMap* map, const Coords& coords,
+                     const PartyMember* attacker,
+                     const Weapon* weapon, Creature** cptr) {
+    Creature* creature = map->creatureAt(coords);
+    if (! creature)
+        return AR_NoTarget; // No target found.
+    *cptr = creature;
+
+    if (c->location->prev->map->id == MAP_ABYSS && ! weapon->isMagic())
+        return AR_Miss;     // Non-magical weapons in the Abyss miss.
+
+    if (CombatController::attackHit(attacker, creature))
+        return AR_Hit;      // The weapon hit!
+
+    return AR_Miss;         // Player naturally missed.
+}
+#endif
 
 bool CombatController::attackAt(const Coords &coords, PartyMember *attacker, int dir, int range, int distance) {
     const Weapon *weapon = attacker->getWeapon();
@@ -647,7 +681,7 @@ bool CombatController::creatureRangedAttack(Creature* attacker, int dir) {
     MapTile hit  = map->tileset->getByName(attacker->getHitTile())->getId();
     MapTile miss = map->tileset->getByName(attacker->getMissTile())->getId();
     vector<Coords> path = gameGetDirectionalActionPath(dir, MASK_DIR_ALL,
-                                attacker->getCoords(), 1, 11,
+                                attacker->coords, 1, 11,
                                 &Tile::canAttackOverTile, false);
     vector<Coords>::iterator it;
     for (it = path.begin(); it != path.end(); it++) {
@@ -660,7 +694,7 @@ bool CombatController::creatureRangedAttack(Creature* attacker, int dir) {
         const Coords& coords = path[path.size() - 1];
         const Tile *ground = map->tileTypeAt(coords, WITH_GROUND_OBJECTS);
         if (ground->isWalkable())
-            map->annotations->add(coords, hit);
+            map->annotations.add(coords, hit);
     }
     return false;
 }
@@ -691,23 +725,25 @@ void CombatController::finishTurn() {
     c->stats->setView(STATS_PARTY_OVERVIEW);
 
     if (isWon() && winOrLose) {
-        end(true);
+        endCombat(true);
         return;
     }
+
+    Map* map = c->location->map;
 
     /* make sure the player with the focus is still in battle (hasn't fled or died) */
     if (player) {
         /* apply effects from tile player is standing on */
-        player->applyEffect(c->location->map->tileTypeAt(player->getCoords(), WITH_GROUND_OBJECTS)->getEffect());
+        player->applyEffect(map, map->tileTypeAt(player->coords, WITH_GROUND_OBJECTS)->getEffect());
     }
 
-    quick = (*c->aura == Aura::QUICKNESS) && player && (xu4_random(2) == 0) ? 1 : 0;
+    quick = (c->aura.getType() == Aura::QUICKNESS) && player && (xu4_random(2) == 0) ? 1 : 0;
 
     /* check to see if the player gets to go again (and is still alive) */
     if (!quick || player->isDisabled()){
 
         do {
-            c->location->map->annotations->passTurn();
+            map->annotations.passTurn();
 
             /* put a sleeping person in place of the player,
                or restore an awakened member to their original state */
@@ -716,7 +752,7 @@ void CombatController::finishTurn() {
                     player->wakeUp();
 
                 /* remove focus from the current party member */
-                player->setFocus(false);
+                player->focused = false;
 
                 /* eat some food */
                 c->party->adjustFood(-1);
@@ -739,7 +775,7 @@ void CombatController::finishTurn() {
                 c->party->endTurn();
 
                 /* count down our aura (if we have one) */
-                c->aura->passTurn();
+                c->aura.passTurn();
 
                 /**
                  * ====================
@@ -755,13 +791,13 @@ void CombatController::finishTurn() {
 
                 /* check to see if combat is over */
                 if (isLost()) {
-                    end(true);
+                    endCombat(true);
                     return;
                 }
 
                 /* end combat immediately if the enemy has fled */
                 else if (isWon() && winOrLose) {
-                    end(true);
+                    endCombat(true);
                     return;
                 }
             }
@@ -776,7 +812,8 @@ void CombatController::finishTurn() {
                   !party[c->party->getActivePlayer()]->isDisabled() && /* and the active player is not disabled */
                   (c->party->getActivePlayer() != focus)));
     }
-    else c->location->map->annotations->passTurn();
+    else
+        map->annotations.passTurn();
 
 #if 0
     if (focus != 0) {
@@ -843,9 +880,9 @@ bool CombatController::keyPressed(int key) {
 
     case U4_ESC:
         if (settings.debug)
-            end(false);         /* don't adjust karma */
-        else screenMessage("Bad command\n");
-
+            endCombat(false);   /* don't adjust karma */
+        else
+            screenMessage("Bad command\n");
         break;
 
     case ' ':
@@ -934,7 +971,7 @@ bool CombatController::keyPressed(int key) {
 
     case 'l':
         if (settings.debug) {
-            Coords coords = getCurrentPlayer()->getCoords();
+            const Coords& coords = getCurrentPlayer()->coords;
             screenMessage("\nLocation:\nx:%d\ny:%d\nz:%d\n", coords.x, coords.y, coords.z);
             screenPrompt();
             valid = false;
@@ -1050,7 +1087,7 @@ bool CombatController::keyPressed(int key) {
     }
 
     if (valid) {
-        c->lastCommandTime = time(NULL);
+        gameStampCommandTime();
         if (endTurn && (xu4.eventHandler->getController() == this))
             c->location->turnCompleter->finishTurn();
     }
@@ -1080,13 +1117,10 @@ void CombatController::attack() {
     int range = weapon->range;
     if (weapon->canChooseDistance()) {
         screenMessage("Range: ");
-        int choice = ReadChoiceController::get("123456789");
-        if ((choice - '0') >= 1 && (choice - '0') <= weapon->range) {
-            range = choice - '0';
-            screenMessage("%d\n", range);
-        } else {
+        range = ReadChoiceController::get("123456789") - '0';
+        if (range < 1 || range > weapon->range)
             return;
-        }
+        screenMessage("%d\n", range);
     }
 
     // the attack was already made, even if there is no valid target
@@ -1096,17 +1130,64 @@ void CombatController::attack() {
 
     vector<Coords> path =
         gameGetDirectionalActionPath(MASK_DIR(dir), MASK_DIR_ALL,
-                                attacker->getCoords(), 1, range,
+                                attacker->coords, 1, range,
                                 weapon->canAttackThroughObjects() ? NULL
                                                     : &Tile::canAttackOverTile,
                                 false);
 
-    bool foundTarget = false;
     int targetDistance = path.size();
-    Coords targetCoords(attacker->getCoords());
-    if (path.size() > 0)
+    Coords targetCoords;
+    if (targetDistance > 0)
         targetCoords = path.back();
+    else
+        targetCoords = attacker->coords;
 
+    bool foundTarget = false;
+#ifdef GPU_RENDER
+    Creature* target = NULL;
+    MapTile missTile = map->tileset->getByName(weapon->missTile)->id;
+    int result = AR_None;
+    if (weapon->rangeAbsolute()) {
+        if (range == targetDistance) {
+            result = attackAt2(map, path[range], attacker, weapon, &target);
+        }
+    } else {
+        for (int di = 0; di < targetDistance; ++di) {
+            result = attackAt2(map, path[di], attacker, weapon, &target);
+            if (result != AR_NoTarget) {
+                foundTarget = true;
+                targetDistance = di + 1;
+                targetCoords = path[di];
+                break;
+            }
+        }
+    }
+
+    if (weapon->showTravel() && targetDistance > 1)
+        animateAttack(path, targetDistance - 1, missTile.id);
+
+    switch (result) {
+        case AR_None:
+        case AR_NoTarget:
+            break;
+        case AR_Miss:
+            screenMessage("Missed!\n");
+            GameController::flashTile(targetCoords, missTile, 1);
+            break;
+        case AR_Hit:
+            GameController::flashTile(targetCoords, missTile, 1);
+            soundPlay(SOUND_NPC_STRUCK, false, -1);
+
+            MapTile hitTile = map->tileset->getByName(weapon->hitTile)->getId();
+            GameController::flashTile(targetCoords, hitTile, 3);
+
+            /* apply the damage to the creature */
+            if (! attacker->dealDamage(map, target, attacker->getDamage())) {
+                GameController::flashTile(targetCoords, hitTile, 1);
+            }
+            break;
+    }
+#else
     int distance = 1;
     for (vector<Coords>::iterator i = path.begin(); i != path.end(); i++) {
         if (attackAt(*i, attacker, MASK_DIR(dir), range, distance)) {
@@ -1117,6 +1198,7 @@ void CombatController::attack() {
         }
         distance++;
     }
+#endif
 
     // is weapon lost? (e.g. dagger)
     if (weapon->loseWhenUsed() ||
@@ -1129,7 +1211,7 @@ void CombatController::attack() {
     if (weapon->leaveTile) {
         const Tile *ground = map->tileTypeAt(targetCoords, WITHOUT_OBJECTS);
         if (ground->isWalkable())
-            map->annotations->add(targetCoords,
+            map->annotations.add(targetCoords,
                     map->tileset->getByName(weapon->leaveTile)->getId());
     }
 
@@ -1145,9 +1227,13 @@ void CombatController::attack() {
         returnWeaponToOwner(targetCoords, targetDistance, MASK_DIR(dir), weapon);
 }
 
-void CombatController::update(Party *party, PartyEvent &event) {
-    if (event.type == PartyEvent::PLAYER_KILLED)
-        screenMessage("\n%c%s is Killed!%c\n", FG_RED, event.player->getName().c_str(), FG_WHITE);
+void CombatController::combatNotice(int sender, void* eventData, void* user) {
+    PartyEvent* event = (PartyEvent*) eventData;
+    (void) sender;
+    (void) user;
+    if (event->type == PartyEvent::PLAYER_KILLED)
+        screenMessage("\n%c%s is Killed!%c\n",
+                      FG_RED, event->player->getName().c_str(), FG_WHITE);
 }
 
 /**
@@ -1190,7 +1276,7 @@ PartyMember *CombatMap::partyMemberAt(Coords coords) {
     PartyMemberVector::iterator i;
 
     for (i = party.begin(); i != party.end(); i++) {
-        if ((*i)->getCoords() == coords)
+        if ((*i)->coords == coords)
             return *i;
     }
     return NULL;
@@ -1205,7 +1291,7 @@ Creature *CombatMap::creatureAt(Coords coords) {
     CreatureVector::iterator i;
 
     for (i = creatures.begin(); i != creatures.end(); i++) {
-        if ((*i)->getCoords() == coords)
+        if ((*i)->coords == coords)
             return *i;
     }
     return NULL;
@@ -1255,7 +1341,7 @@ MapId CombatMap::mapForTile(const Tile *groundTile, const Tile *transport, Objec
     static std::map<const Tile *, MapId> dungeontileMap;
     bool fromShip, toShip;
     Location* loc = c->location;
-    Object *objUnder = loc->map->objectAt(loc->coords);
+    const Object *objUnder = loc->map->objectAt(loc->coords);
 
     if (loc->context & CTX_DUNGEON) {
         if (dungeontileMap.empty()) {
@@ -1279,17 +1365,17 @@ MapId CombatMap::mapForTile(const Tile *groundTile, const Tile *transport, Objec
     }
 
     fromShip = toShip = false;
-    if (transport->isShip() || (objUnder && objUnder->getTile().getTileType()->isShip()))
+    if (transport->isShip() || (objUnder && objUnder->tile.getTileType()->isShip()))
         fromShip = true;
-    if (obj->getTile().getTileType()->isPirateShip())
+    if (obj->tile.getTileType()->isPirateShip())
         toShip = true;
 
     if (fromShip && toShip)
         return MAP_SHIPSHIP_CON;
 
     /* We can fight creatures and townsfolk */
-    if (obj->getType() != Object::UNKNOWN) {
-        const Tile *tileUnderneath = loc->map->tileTypeAt(obj->getCoords(), WITHOUT_OBJECTS);
+    if (obj->objType != Object::UNKNOWN) {
+        const Tile *tileUnderneath = loc->map->tileTypeAt(obj->coords, WITHOUT_OBJECTS);
 
         if (toShip)
             return MAP_SHORSHIP_CON;

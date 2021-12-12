@@ -5,13 +5,8 @@
 #ifndef UTILS_H
 #define UTILS_H
 
-#include <cstdio>
-#include <ctime>
-#include <map>
 #include <string>
 #include <vector>
-
-#include "filesystem.h"
 
 using std::string;
 
@@ -33,12 +28,11 @@ inline void AdjustValueMax(unsigned short &v, int val, int max) { v += val; if (
 inline void AdjustValueMin(unsigned short &v, int val, int min) { v += val; if (v < min) v = min; }
 inline void AdjustValue(unsigned short &v, int val, int max, int min) { v += val; if (v > max) v = max; if (v < min) v = min; }
 
-void xu4_srandom(void);
+void xu4_srandom(uint32_t);
 extern "C" int xu4_random(int upperval);
 string& trim(string &val, const string &chars_to_trim = "\t\013\014 \n\r");
 string& lowercase(string &val);
 string& uppercase(string &val);
-string  xu4_to_string(int val);
 std::vector<string> split(const string &s, const string &separators);
 
 #endif

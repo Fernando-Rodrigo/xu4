@@ -5,23 +5,24 @@
 #ifndef MAP_H
 #define MAP_H
 
+#include <deque>
 #include <map>
 #include <vector>
 
+#include "annotation.h"
 #include "coords.h"
 #include "direction.h"
 #include "object.h"
 #include "savegame.h"
-#include "types.h"
 #include "u4file.h"
 
-class AnnotationMgr;
-class Object;
 class Creature;
 class Tileset;
 struct Portal;
 
 typedef std::vector<Portal *> PortalList;
+typedef std::deque<Object *> ObjectDeque;
+typedef std::deque<const Object *> CObjectDeque;
 
 /* flags */
 #define SHOW_AVATAR (1 << 0)
@@ -58,6 +59,11 @@ public:
         BORDER_FIXED
     };
 
+    enum QueryResult {
+        QueryDone,
+        QueryContinue
+    };
+
     Map();
     virtual ~Map();
 
@@ -68,6 +74,9 @@ public:
     void queryVisible(const Coords &coords, int radius,
                       void (*func)(const Coords*, VisualId, void*),
                       void* user, const Object** focus) const;
+    void queryAnnotations(const Coords& pos,
+                          int (*func)(const Annotation*, void*),
+                          void* user) const;
     const Object* objectAt(const Coords &coords) const;
     Object* objectAt(const Coords &coords) {
         return (Object*) static_cast<const Map*>(this)->objectAt(coords);
@@ -81,9 +90,10 @@ public:
     class Creature *addCreature(const class Creature *m, const Coords& coords);
     class Object *addObject(MapTile tile, MapTile prevTile, const Coords& coords);
     class Object *addObject(Object *obj, Coords coords);
-    void removeObject(const class Object *rem, bool deleteObject = true);
+    bool removeObject(const class Object *rem, bool deleteObject = true);
     ObjectDeque::iterator removeObject(ObjectDeque::iterator rem, bool deleteObject = true);
     void clearObjects();
+    bool objectPresent(const Object* obj) const;
     class Creature *moveObjects(const Coords& avatar);
     int getNumberOfCreatures();
     int getValidMoves(const Coords& from, MapTile transport);
@@ -116,7 +126,7 @@ public:
 
     //uint8_t* compressed_chunks;       // Ultima 5 map
     PortalList      portals;
-    AnnotationMgr*  annotations;
+    AnnotationList  annotations;
     TileId*         data;
     ObjectDeque     objects;
     std::map<Symbol, Coords> labels;

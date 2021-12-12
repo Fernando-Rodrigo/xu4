@@ -10,11 +10,14 @@
 
 #include "controller.h"
 #include "menu.h"
-#include "observer.h"
 #include "savegame.h"
 #include "imageview.h"
 #include "textview.h"
 #include "tileview.h"
+
+#ifdef GPU_RENDER
+#include "map.h"
+#endif
 
 class IntroObjectState;
 class Tile;
@@ -42,7 +45,11 @@ public:
 
     bool load();
 
+#ifdef GPU_RENDER
+    Map introMap;
+#else
     std::vector<MapTile> introMap;
+#endif
     unsigned char *sigData;
     unsigned char *scriptTable;
     const Tile **baseTileTable;
@@ -73,23 +80,20 @@ private:
  *      <li>get rid global intro instance -- should only need to be accessed from u4.cpp</li>
  * </ul>
  */
-class IntroController : public Controller, public Observer<Menu *, MenuEvent &> {
+class IntroController : public Controller {
 public:
     IntroController();
     ~IntroController();
 
-    bool init();
     bool hasInitiatedNewGame();
 
-    void deleteIntro();
+    bool present();
+    void conclude();
     bool keyPressed(int key);
     unsigned char *getSigData();
     void updateScreen();
     void timerFired();
 
-    void preloadMap();
-
-    void update(Menu *menu, MenuEvent &event);
     void updateConfMenu(MenuEvent &event);
     void updateVideoMenu(MenuEvent &event);
     void updateGfxMenu(MenuEvent &event);
@@ -99,13 +103,15 @@ public:
     void updateGameplayMenu(MenuEvent &event);
     void updateInterfaceMenu(MenuEvent &event);
 
-    //
-    // Title methods
-    //
+private:
+    static void introNotice(int, void*, void*);
+    bool init();
+    void preloadMap();
+    void deleteIntro();
+
     void initTitles();
     bool updateTitle();
 
-private:
     void drawMap();
     void drawMapStatic();
     void drawMapAnimated();
@@ -119,6 +125,7 @@ private:
     bool doQuestion(int answer);
     void initPlayers(SaveGame *saveGame);
     std::string getQuestion(int v1, int v2);
+    void dispatchMenu(const Menu *menu, MenuEvent &event);
 #ifdef IOS
 public:
     void tryTriggerIntroMusic();
@@ -129,6 +136,9 @@ public:
     void showStory();
     void journeyOnward();
     void about();
+#ifdef GPU_RENDER
+    void enableMap();
+#endif
 #ifdef IOS
 private:
 #endif
@@ -226,7 +236,11 @@ private:
     bool beastiesVisible;
     int sleepCycles;
     int scrPos;  /* current position in the script table */
+#ifdef GPU_RENDER
+    int mapScissor[4];
+#else
     IntroObjectState *objectStateTable;
+#endif
     ImageInfo* beastiesImg;
 
     bool justInitiatedNewGame;
@@ -281,6 +295,7 @@ private:
     std::vector<AnimElement> titles;            // list of title elements
     std::vector<AnimElement>::iterator title;   // current title element
 
+    int  listenerId;
     int  introMusic;
     bool bSkipTitles;
 };

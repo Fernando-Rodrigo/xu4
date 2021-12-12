@@ -9,26 +9,30 @@
 
 #include "intro.h"
 
-#include "config.h"
 #include "debug.h"
 #include "error.h"
-#include "event.h"
 #include "imagemgr.h"
-#include "menu.h"
 #include "sound.h"
-#include "player.h"
-#include "savegame.h"
+#include "party.h"
 #include "screen.h"
 #include "settings.h"
-#include "shrine.h"
 #include "tileset.h"
 #include "u4file.h"
 #include "utils.h"
 #include "xu4.h"
 
+#ifdef USE_GL
+#ifdef GPU_RENDER
+extern bool loadMapData(Map *map, U4FILE *uf, Symbol borderTile);
+#endif
+#include "gpu.h"
+#endif
+
 #ifdef IOS
 #include "ios_helpers.h"
 #endif
+
+extern uint32_t getTicks();
 
 using namespace std;
 
@@ -46,12 +50,14 @@ using namespace std;
 #define GYP_SEGUE1 13
 #define GYP_SEGUE2 14
 
+#ifndef GPU_RENDER
 class IntroObjectState {
 public:
     IntroObjectState() : x(0), y(0), tile(0) {}
     int x, y;
     MapTile tile; /* base tile + tile frame */
 };
+#endif
 
 /* temporary place-holder for settings changes */
 SettingsData settingsChanged;
@@ -78,16 +84,11 @@ IntroBinData::IntroBinData() :
 }
 
 IntroBinData::~IntroBinData() {
-    if (sigData)
-        delete [] sigData;
-    if (scriptTable)
-        delete [] scriptTable;
-    if (baseTileTable)
-        delete [] baseTileTable;
-    if (beastie1FrameTable)
-        delete [] beastie1FrameTable;
-    if (beastie2FrameTable)
-        delete [] beastie2FrameTable;
+    delete [] sigData;
+    delete [] scriptTable;
+    delete [] baseTileTable;
+    delete [] beastie1FrameTable;
+    delete [] beastie2FrameTable;
 
     introQuestions.clear();
     introText.clear();
@@ -118,14 +119,23 @@ bool IntroBinData::load() {
     u4fread(sigData, 1, 533, title);
 
     u4fseek(title, INTRO_MAP_OFFSET, SEEK_SET);
+#ifdef GPU_RENDER
+    introMap.id     = 255;      // Unique Id required by screenUpdateMap.
+    introMap.border_behavior = Map::BORDER_WRAP;
+    introMap.width  = INTRO_MAP_WIDTH;
+    introMap.height = INTRO_MAP_HEIGHT;
+    introMap.flags  = NO_LINE_OF_SIGHT;
+    introMap.tileset = xu4.config->tileset();
+    loadMapData(&introMap, title, 0);
+#else
     introMap.resize(INTRO_MAP_WIDTH * INTRO_MAP_HEIGHT, MapTile(0));
     for (i = 0; i < INTRO_MAP_HEIGHT * INTRO_MAP_WIDTH; i++)
         introMap[i] = usaveIds->moduleId(u4fgetc(title));
+#endif
 
     u4fseek(title, INTRO_SCRIPT_TABLE_OFFSET, SEEK_SET);
     scriptTable = new unsigned char[INTRO_SCRIPT_TABLE_SIZE];
-    for (i = 0; i < INTRO_SCRIPT_TABLE_SIZE; i++)
-        scriptTable[i] = u4fgetc(title);
+    u4fread(scriptTable, 1, INTRO_SCRIPT_TABLE_SIZE, title);
 
     u4fseek(title, INTRO_BASETILE_TABLE_OFFSET, SEEK_SET);
     baseTileTable = new const Tile*[INTRO_BASETILE_TABLE_SIZE];
@@ -281,6 +291,31 @@ IntroController::~IntroController() {
     }
 }
 
+bool IntroController::present() {
+    init();
+    preloadMap();
+    listenerId = gs_listen(1<<SENDER_MENU, introNotice, this);
+    return true;
+}
+
+void IntroController::conclude() {
+    gs_unplug(listenerId);
+    deleteIntro();
+}
+
+#ifdef GPU_RENDER
+void IntroController::enableMap() {
+    Coords center(INTRO_MAP_WIDTH / 2, INTRO_MAP_HEIGHT / 2);
+    screenUpdateMap(&mapArea, &binData->introMap, center);
+}
+
+#define MAP_ENABLE  enableMap()
+#define MAP_DISABLE mapArea.clear()
+#else
+#define MAP_ENABLE
+#define MAP_DISABLE
+#endif
+
 /**
  * Initializes intro state and loads in introduction graphics, text
  * and map data from title.exe.
@@ -334,7 +369,9 @@ bool IntroController::init() {
 
     sleepCycles = 0;
     scrPos = 0;
+#ifndef GPU_RENDER
     objectStateTable = new IntroObjectState[IntroBinData::INTRO_BASETILE_TABLE_SIZE];
+#endif
 
     backgroundArea.reinit();
     menuArea.reinit();
@@ -362,8 +399,15 @@ void IntroController::deleteIntro() {
     delete binData;
     binData = NULL;
 
+#ifdef GPU_RENDER
+    // Ensure that any running map animations are freed.
+    Animator* fa = &xu4.eventHandler->flourishAnim;
+    if (fa->used)
+        anim_clear(fa);
+#else
     delete [] objectStateTable;
     objectStateTable = NULL;
+#endif
 
     xu4.imageMgr->freeResourceGroup(StageIntro);
     beastiesImg = NULL;
@@ -388,6 +432,7 @@ bool IntroController::keyPressed(int key) {
         break;
 
     case INTRO_MAP:
+        MAP_DISABLE;
         mode = INTRO_MENU;
         updateScreen();
         break;
@@ -403,6 +448,7 @@ bool IntroController::keyPressed(int key) {
         case 'r':
             mode = INTRO_MAP;
             updateScreen();
+            MAP_ENABLE;
             break;
         case 'c': {
             // Make a copy of our settings so we can change them
@@ -452,17 +498,21 @@ bool IntroController::keyPressed(int key) {
  * Draws the small map on the intro screen.
  */
 void IntroController::drawMap() {
-    if (0 && sleepCycles > 0) {
+    if (sleepCycles > 0) {
         drawMapStatic();
         drawMapAnimated();
         sleepCycles--;
     }
     else {
+        TileId tileId;
+        int frame;
+        int x, y;
         unsigned char commandNibble;
         unsigned char dataNibble;
+        const unsigned char* script = binData->scriptTable;
 
         do {
-            commandNibble = binData->scriptTable[scrPos] >> 4;
+            commandNibble = script[scrPos] >> 4;
 
             switch(commandNibble) {
                 /* 0-4 = set object position and tile frame */
@@ -479,20 +529,30 @@ void IntroController::drawMap() {
                    y = y coordinate
                    t = tile frame (3 most significant bits of second byte)
                    ---------------------------------------------------------- */
-                dataNibble = binData->scriptTable[scrPos] & 0xf;
-                objectStateTable[dataNibble].x = binData->scriptTable[scrPos+1] & 0x1f;
-                objectStateTable[dataNibble].y = commandNibble;
+                dataNibble = script[scrPos] & 0xf;
+                x = script[scrPos+1] & 0x1f;
+                y = commandNibble;
 
                 // See if the tile id needs to be recalculated
-                if ((binData->scriptTable[scrPos+1] >> 5) >= binData->baseTileTable[dataNibble]->getFrames()) {
-                    int frame = (binData->scriptTable[scrPos+1] >> 5) - binData->baseTileTable[dataNibble]->getFrames();
-                    objectStateTable[dataNibble].tile = MapTile(binData->baseTileTable[dataNibble]->getId() + 1);
-                    objectStateTable[dataNibble].tile.frame = frame;
+                tileId = binData->baseTileTable[dataNibble]->getId();
+                frame = script[scrPos+1] >> 5;
+                if (frame >= binData->baseTileTable[dataNibble]->getFrames()) {
+                    frame -= binData->baseTileTable[dataNibble]->getFrames();
+                    tileId += 1;
                 }
-                else {
-                    objectStateTable[dataNibble].tile = MapTile(binData->baseTileTable[dataNibble]->getId());
-                    objectStateTable[dataNibble].tile.frame = (binData->scriptTable[scrPos+1] >> 5);
+
+#ifdef GPU_RENDER
+                {
+                VisualEffect* fx =
+                    mapArea.useEffect(dataNibble, tileId, (float)x, (float)y);
+                fx->vid += frame;
                 }
+#else
+                objectStateTable[dataNibble].x = x;
+                objectStateTable[dataNibble].y = y;
+                objectStateTable[dataNibble].tile = MapTile(tileId);
+                objectStateTable[dataNibble].tile.frame = frame;
+#endif
 
                 scrPos += 2;
                 break;
@@ -502,8 +562,12 @@ void IntroController::drawMap() {
                    Format: 7i
                    i = table index
                    --------------- */
-                dataNibble = binData->scriptTable[scrPos] & 0xf;
+                dataNibble = script[scrPos] & 0xf;
+#ifdef GPU_RENDER
+                mapArea.removeEffect(dataNibble);
+#else
                 objectStateTable[dataNibble].tile = 0;
+#endif
                 scrPos++;
                 break;
             case 8:
@@ -516,7 +580,7 @@ void IntroController::drawMap() {
                 drawMapAnimated();
 
                 /* set sleep cycles */
-                sleepCycles = binData->scriptTable[scrPos] & 0xf;
+                sleepCycles = script[scrPos] & 0xf;
                 scrPos++;
                 break;
             case 0xf:
@@ -538,15 +602,18 @@ void IntroController::drawMap() {
 }
 
 void IntroController::drawMapStatic() {
+#ifndef GPU_RENDER
     int x, y;
 
     // draw unmodified map
     for (y = 0; y < INTRO_MAP_HEIGHT; y++)
         for (x = 0; x < INTRO_MAP_WIDTH; x++)
             mapArea.drawTile(binData->introMap[x + (y * INTRO_MAP_WIDTH)], x, y);
+#endif
 }
 
 void IntroController::drawMapAnimated() {
+#ifndef GPU_RENDER
     int i;
 
     // draw animated objects
@@ -557,6 +624,7 @@ void IntroController::drawMapAnimated() {
             mapArea.drawTile(state.tile, state.x, state.y);
     }
     Image::enableBlend(0);
+#endif
 }
 
 /**
@@ -657,6 +725,8 @@ void IntroController::updateScreen() {
             xu4.errorMessage = NULL;
 
             drawBeasties();
+            screenUploadToGPU();
+
             // wait for a couple seconds
             EventHandler::wait_msecs(3000);
             // clear the screen again
@@ -944,7 +1014,8 @@ string IntroController::getQuestion(int v1, int v2) {
  * Starts the game.
  */
 void IntroController::journeyOnward() {
-    if (saveGameLoad()) {
+    // Return to a running game or attempt to load a saved one.
+    if (xu4.saveGame || saveGameLoad()) {
         xu4.stage = StagePlay;
         xu4.eventHandler->setControllerDone();
     } else {
@@ -1001,7 +1072,6 @@ void IntroController::showText(const string &text) {
  * updates are handled by observing the menu.
  */
 void IntroController::runMenu(Menu *menu, TextView *view, bool withBeasties) {
-    menu->addObserver(this);
     menu->reset();
 
     // if the menu has an extended height, fill the menu background, otherwise reset the display
@@ -1015,7 +1085,6 @@ void IntroController::runMenu(Menu *menu, TextView *view, bool withBeasties) {
 
     // enable the cursor here, after the menu has been established
     view->enableCursor();
-    menu->deleteObserver(this);
     view->disableCursor();
 }
 
@@ -1035,6 +1104,7 @@ void IntroController::timerFired() {
             beastiesVisible = true;
             musicPlay(introMusic);
             updateScreen();
+            MAP_ENABLE;
         }
 
     if (mode == INTRO_MAP)
@@ -1047,6 +1117,8 @@ void IntroController::timerFired() {
         beastie1Cycle = 0;
     if (xu4_random(2) && ++beastie2Cycle >= IntroBinData::BEASTIE2_FRAMES)
         beastie2Cycle = 0;
+
+    screenUploadToGPU();
 }
 
 /**
@@ -1054,7 +1126,12 @@ void IntroController::timerFired() {
  * activated.
  * TODO, reduce duped code.
  */
-void IntroController::update(Menu *menu, MenuEvent &event) {
+void IntroController::introNotice(int sender, void* eventData, void* user) {
+    MenuEvent* event = (MenuEvent*) eventData;
+    ((IntroController*) user)->dispatchMenu(event->menu, *event);
+}
+
+void IntroController::dispatchMenu(const Menu *menu, MenuEvent &event) {
     if (menu == &confMenu)
         updateConfMenu(event);
     else if (menu == &videoMenu)
@@ -1077,9 +1154,9 @@ void IntroController::update(Menu *menu, MenuEvent &event) {
 }
 
 void IntroController::updateConfMenu(MenuEvent &event) {
-    if (event.getType() == MenuEvent::ACTIVATE ||
-        event.getType() == MenuEvent::INCREMENT ||
-        event.getType() == MenuEvent::DECREMENT) {
+    if (event.type == MenuEvent::ACTIVATE ||
+        event.type == MenuEvent::INCREMENT ||
+        event.type == MenuEvent::DECREMENT) {
 
         // show or hide game enhancement options if enhancements are enabled/disabled
         confMenu.getItemById(MI_CONF_GAMEPLAY)->setVisible(settingsChanged.enhancements);
@@ -1089,7 +1166,7 @@ void IntroController::updateConfMenu(MenuEvent &event) {
         xu4.settings->setData(settingsChanged);
         xu4.settings->write();
 
-        switch(event.getMenuItem()->getId()) {
+        switch(event.item->getId()) {
         case MI_CONF_VIDEO:
             runMenu(&videoMenu, &extendedMenuArea, true);
             break;
@@ -1125,11 +1202,11 @@ void IntroController::updateConfMenu(MenuEvent &event) {
 }
 
 void IntroController::updateVideoMenu(MenuEvent &event) {
-    if (event.getType() == MenuEvent::ACTIVATE ||
-        event.getType() == MenuEvent::INCREMENT ||
-        event.getType() == MenuEvent::DECREMENT) {
+    if (event.type == MenuEvent::ACTIVATE ||
+        event.type == MenuEvent::INCREMENT ||
+        event.type == MenuEvent::DECREMENT) {
 
-        switch(event.getMenuItem()->getId()) {
+        switch(event.item->getId()) {
         case USE_SETTINGS:
             /* save settings (if necessary) */
             if (*xu4.settings != settingsChanged) {
@@ -1163,12 +1240,12 @@ void IntroController::updateVideoMenu(MenuEvent &event) {
 
 void IntroController::updateGfxMenu(MenuEvent &event)
 {
-    if (event.getType() == MenuEvent::ACTIVATE ||
-        event.getType() == MenuEvent::INCREMENT ||
-        event.getType() == MenuEvent::DECREMENT) {
+    if (event.type == MenuEvent::ACTIVATE ||
+        event.type == MenuEvent::INCREMENT ||
+        event.type == MenuEvent::DECREMENT) {
 
 
-        switch(event.getMenuItem()->getId()) {
+        switch(event.item->getId()) {
         case MI_GFX_RETURN:
             runMenu(&videoMenu, &extendedMenuArea, true);
             break;
@@ -1182,11 +1259,11 @@ void IntroController::updateGfxMenu(MenuEvent &event)
 }
 
 void IntroController::updateSoundMenu(MenuEvent &event) {
-    if (event.getType() == MenuEvent::ACTIVATE ||
-        event.getType() == MenuEvent::INCREMENT ||
-        event.getType() == MenuEvent::DECREMENT) {
+    if (event.type == MenuEvent::ACTIVATE ||
+        event.type == MenuEvent::INCREMENT ||
+        event.type == MenuEvent::DECREMENT) {
 
-        switch(event.getMenuItem()->getId()) {
+        switch(event.item->getId()) {
             case MI_SOUND_01:
                 musicSetVolume(settingsChanged.musicVol);
                 break;
@@ -1216,11 +1293,11 @@ void IntroController::updateSoundMenu(MenuEvent &event) {
 }
 
 void IntroController::updateInputMenu(MenuEvent &event) {
-    if (event.getType() == MenuEvent::ACTIVATE ||
-        event.getType() == MenuEvent::INCREMENT ||
-        event.getType() == MenuEvent::DECREMENT) {
+    if (event.type == MenuEvent::ACTIVATE ||
+        event.type == MenuEvent::INCREMENT ||
+        event.type == MenuEvent::DECREMENT) {
 
-        switch(event.getMenuItem()->getId()) {
+        switch(event.item->getId()) {
         case USE_SETTINGS:
             // save settings
             xu4.settings->setData(settingsChanged);
@@ -1249,11 +1326,11 @@ void IntroController::updateInputMenu(MenuEvent &event) {
 }
 
 void IntroController::updateSpeedMenu(MenuEvent &event) {
-    if (event.getType() == MenuEvent::ACTIVATE ||
-        event.getType() == MenuEvent::INCREMENT ||
-        event.getType() == MenuEvent::DECREMENT) {
+    if (event.type == MenuEvent::ACTIVATE ||
+        event.type == MenuEvent::INCREMENT ||
+        event.type == MenuEvent::DECREMENT) {
 
-        switch(event.getMenuItem()->getId()) {
+        switch(event.item->getId()) {
         case USE_SETTINGS:
             // save settings
             xu4.settings->setData(settingsChanged);
@@ -1277,11 +1354,11 @@ void IntroController::updateSpeedMenu(MenuEvent &event) {
 }
 
 void IntroController::updateGameplayMenu(MenuEvent &event) {
-    if (event.getType() == MenuEvent::ACTIVATE ||
-        event.getType() == MenuEvent::INCREMENT ||
-        event.getType() == MenuEvent::DECREMENT) {
+    if (event.type == MenuEvent::ACTIVATE ||
+        event.type == MenuEvent::INCREMENT ||
+        event.type == MenuEvent::DECREMENT) {
 
-        switch(event.getMenuItem()->getId()) {
+        switch(event.item->getId()) {
         case USE_SETTINGS:
             // save settings
             xu4.settings->setData(settingsChanged);
@@ -1301,11 +1378,11 @@ void IntroController::updateGameplayMenu(MenuEvent &event) {
 }
 
 void IntroController::updateInterfaceMenu(MenuEvent &event) {
-    if (event.getType() == MenuEvent::ACTIVATE ||
-        event.getType() == MenuEvent::INCREMENT ||
-        event.getType() == MenuEvent::DECREMENT) {
+    if (event.type == MenuEvent::ACTIVATE ||
+        event.type == MenuEvent::INCREMENT ||
+        event.type == MenuEvent::DECREMENT) {
 
-        switch(event.getMenuItem()->getId()) {
+        switch(event.item->getId()) {
             case USE_SETTINGS:
                 // save settings
                 xu4.settings->setData(settingsChanged);
@@ -1501,6 +1578,7 @@ void IntroController::initPlayers(SaveGame *saveGame) {
  */
 void IntroController::preloadMap()
 {
+#ifndef GPU_RENDER
     int x, y, i;
 
     // draw unmodified map
@@ -1513,6 +1591,7 @@ void IntroController::preloadMap()
         if (objectStateTable[i].tile != 0)
             mapArea.loadTile(objectStateTable[i].tile);
     }
+#endif
 }
 
 
@@ -1732,9 +1811,6 @@ void IntroController::getTitleSourceData()
     info->image = scaled;
 #endif
 }
-
-
-#include "support/getTicks.c"
 
 
 //
@@ -1964,7 +2040,23 @@ bool IntroController::updateTitle()
                 SCALED( (step+1) * 8 ),
                 SCALED( title->srcImage->height()) );
 
+#ifdef GPU_RENDER
+            //printf( "KR reveal %d\n", step );
+            if (step >= mapArea.columns)
+                mapArea.scissor = NULL;
+            else {
+                int scale = xu4.settings->scale;
+                mapScissor[0] = scale * (160 - step * 8);   // Left
+                mapScissor[1] = mapArea.screenRect[1];      // Bottom
+                mapScissor[2] = scale * (step * 2 * 8);     // Width
+                mapScissor[3] = mapArea.screenRect[3];      // Height
+                mapArea.scissor = mapScissor;
 
+                if (step == 1) {
+                    MAP_ENABLE;
+                }
+            }
+#else
             // create a destimage for the map tiles
             int newtime = getTicks();
             if (newtime > title->timeDuration + 250/4)
@@ -1988,7 +2080,7 @@ bool IntroController::updateTitle()
                 SCALED( 8 ),
                 SCALED( (step * 2) * 8 ),
                 SCALED( (10 * 8) ) );
-
+#endif
             break;
         }
     }

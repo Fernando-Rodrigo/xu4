@@ -4,23 +4,13 @@
 
 #include "item.h"
 
-#include "annotation.h"
 #include "codex.h"
-#include "combat.h"
-#include "context.h"
 #include "debug.h"
 #include "dungeon.h"
-#include "game.h"
-#include "location.h"
-#include "map.h"
 #include "mapmgr.h"
-#include "names.h"
-#include "player.h"
 #include "portal.h"
-#include "savegame.h"
 #include "screen.h"
 #include "tileset.h"
-#include "u4.h"
 #include "utils.h"
 #include "weapon.h"
 #ifdef IOS
@@ -315,7 +305,7 @@ void useBBC(int item) {
  */
 void useHorn(int item) {
     screenMessage("\nThe Horn sounds an eerie tone!\n");
-    c->aura->set(Aura::HORN, 10);
+    c->aura.set(Aura::HORN, 10);
 }
 
 /**
@@ -470,7 +460,7 @@ void useStone(int item) {
                         Coords coords;
                         screenMessage("\n\nThe altar changes before thyne eyes!\n");
                         c->location->getCurrentPosition(&coords);
-                        c->location->map->annotations->add(coords, c->location->map->tileset->getByName(SYM_DOWN_LADDER)->getId());
+                        c->location->map->annotations.add(coords, c->location->map->tileset->getByName(SYM_DOWN_LADDER)->getId());
                     }
                     /* start chamber of the codex sequence... */
                     else {

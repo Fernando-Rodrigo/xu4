@@ -5,7 +5,7 @@
 #include <cctype>
 #include <map>
 #include <string>
-#include "script.h"
+#include "script_xml.h"
 
 #include "camp.h"
 #include "config.h"
@@ -16,7 +16,7 @@
 #include "event.h"
 #include "filesystem.h"
 #include "game.h"
-#include "player.h"
+#include "party.h"
 #include "savegame.h"
 #include "screen.h"
 #include "settings.h"
@@ -27,10 +27,20 @@
 #include "utils.h"
 #include "weapon.h"
 #include "xml.h"
+#include "u4.h"
 #include "xu4.h"
 
 using namespace std;
 
+
+/**
+ * Converts an integer value to a string
+ */
+static string xu4_to_string(int val) {
+    char buffer[16];
+    sprintf(buffer, "%d", val);
+    return buffer;
+}
 
 static string translateContext(vector<string>& parts) {
     if (parts.size() == 1) {
@@ -1112,7 +1122,7 @@ Script::ReturnCode Script::sleep(xmlNodePtr script, xmlNodePtr current) {
         fprintf(debug, "\nSleep!\n");
 
     CombatController *cc = new InnController();
-    cc->begin();
+    cc->beginCombat();
 
     return RET_OK;
 }
@@ -1374,7 +1384,7 @@ Script::ReturnCode Script::damage(xmlNodePtr script, xmlNodePtr current) {
     PartyMember *p;
 
     p = c->party->member(player);
-    p->applyDamage(pts);
+    p->applyDamage(c->location->map, pts);
 
     if (debug)
         fprintf(debug, "\nDamage: %d damage to player %d", pts, player + 1);
@@ -1716,4 +1726,81 @@ void Script::funcParse(const string & str, string *funcName, string *contents) {
         else *contents = contents->substr(0, pos);
     }
     else funcName->erase();
+}
+
+void Script::talkToVendor(const string& goods) {
+    // unload the previous script if it wasn't already unloaded
+    if (getState() != Script::STATE_UNLOADED)
+        unload();
+    load("vendorScript.xml", goods, "vendor", c->location->map->getName());
+    run("intro");
+#ifdef IOS
+    U4IOS::IOSConversationChoiceHelper choiceDialog;
+#endif
+    while (getState() != STATE_DONE) {
+        // Gather input for the script
+        if (getState() == STATE_INPUT) {
+            switch(getInputType()) {
+            case INPUT_CHOICE: {
+                const string &choices = getChoices();
+                // Get choice
+#ifdef IOS
+                choiceDialog.updateChoices(choices, getTarget(), npcType);
+#endif
+                char val = ReadChoiceController::get(choices);
+                if (isspace(val) || val == '\033')
+                    unsetVar(getInputName());
+                else {
+                    string s_val;
+                    s_val.resize(1);
+                    s_val[0] = val;
+                    setVar(getInputName(), s_val);
+                }
+            } break;
+
+            case INPUT_KEYPRESS:
+                ReadChoiceController::get(" \015\033");
+                break;
+
+            case INPUT_NUMBER: {
+#ifdef IOS
+                U4IOS::IOSConversationHelper ipadNumberInput;
+                ipadNumberInput.beginConversation(U4IOS::UIKeyboardTypeNumberPad, "Amount?");
+#endif
+                int val = ReadIntController::get(getInputMaxLen(), TEXT_AREA_X + c->col, TEXT_AREA_Y + c->line);
+                setVar(getInputName(), val);
+            } break;
+
+            case INPUT_STRING: {
+#ifdef IOS
+                U4IOS::IOSConversationHelper ipadNumberInput;
+                ipadNumberInput.beginConversation(U4IOS::UIKeyboardTypeDefault);
+#endif
+                string str = ReadStringController::get(getInputMaxLen(), TEXT_AREA_X + c->col, TEXT_AREA_Y + c->line);
+                if (str.size()) {
+                    lowercase(str);
+                    setVar(getInputName(), str);
+                }
+                else unsetVar(getInputName());
+            } break;
+
+            case INPUT_PLAYER: {
+                ReadPlayerController getPlayerCtrl;
+                xu4.eventHandler->pushController(&getPlayerCtrl);
+                int player = getPlayerCtrl.waitFor();
+                if (player != -1) {
+                    string player_str = xu4_to_string(player+1);
+                    setVar(getInputName(), player_str);
+                }
+                else unsetVar(getInputName());
+            } break;
+
+            default: break;
+            }
+
+            // Continue running the script!
+            c->line++;
+            _continue();
+        }
+    }
 }

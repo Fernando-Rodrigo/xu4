@@ -2,21 +2,10 @@
  * $Id$
  */
 
-#include <ctime>
-#include "u4.h"
-
-#include "death.h"
-
-#include "map.h"
-#include "annotation.h"
-#include "city.h"
 #include "config.h"
-#include "context.h"
-#include "event.h"
 #include "game.h"
-#include "location.h"
 #include "mapmgr.h"
-#include "player.h"
+#include "party.h"
 #include "portal.h"
 #include "screen.h"
 #include "settings.h"
@@ -62,8 +51,10 @@ void deathStart(int delaySeconds) {
     timerCount = 0;
     timerMsg = 0;
 
-    if (delaySeconds > 0)
-        EventHandler::wait_msecs(delaySeconds * 1000);
+    if (delaySeconds > 0) {
+        if(EventHandler::wait_msecs(delaySeconds * 1000))
+            return;
+    }
 
     gameSetViewMode(VIEW_DEAD);
     screenDisableCursor();
@@ -110,9 +101,9 @@ void deathRevive() {
     c->location->coords.y = REVIVE_CASTLE_Y;
     c->location->coords.z = 0;
 
-    c->aura->set();
+    c->aura.set(Aura::NONE, 0);
     c->horseSpeed = 0;
-    c->lastCommandTime = time(NULL);
+    gameStampCommandTime();
     musicPlayLocale();
 
     c->party->reviveParty();

@@ -7,11 +7,10 @@
 
 #include "settings.h"
 
-#include "debug.h"
 #include "error.h"
 #include "filesystem.h"
 #include "screen.h"
-#include "utils.h"
+#include "xu4.h"
 
 #if defined(_WIN32) || defined(__CYGWIN__)
 #include <windows.h>
@@ -468,8 +467,7 @@ bool Settings::write() {
 
     fclose(settingsFile);
 
-    setChanged();
-    notifyObservers(NULL);
+    gs_emitMessage(SENDER_SETTINGS, this);
 
     return true;
 }
