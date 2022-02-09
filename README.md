@@ -21,9 +21,9 @@ XU4
 XU4 is a remake of the computer game Ultima IV.  The goal is to make
 it easy and convenient to play this classic on modern operating
 systems.  XU4 is primarily inspired by the much more ambitious project
-Exult.  Linux is the primary development platform but it gets ported
-to Windows and MacOS X regularly. It should be trivial to port to any
-system with [Allegro] 5.2 or SDL 1.2 support.
+Exult.  Linux is the primary development platform but it gets built
+for Windows regularly.  It should be trivial to port to any system with
+[Allegro] 5.2 or SDL 1.2 support.
 
 XU4 isn't a new game based on the Ultima IV story -- it is a faithful
 recreation of the old game, right up to the crappy graphics.  If you
@@ -39,49 +39,33 @@ and vice versa, at least in theory.
 Status
 ------
 
-A major code cleanup began in 2021 after a 5-year hiatus in development
-(and 10 years since the last beta release). Recent work includes:
-
- - Completion of the Allegro 5 platform interface.
- - Reworking the configuration to allow alternative storage backends.
- - Elimination of compiler warnings & memory leaks.
- - Preparing the way for GPU rendering.
+The game is fully playable and can display the original DOS EGA and
+upgraded VGA graphics.
 
 Some thoughts for possible improvements:
  - Ultima 5 style aiming in combat (i.e. allow angle shots)
- - more sound effects
- - support for higher-resolution tile sets
- - allow running original game without XML configuration
- - allow the map view to display more of the world
- - menu-based interface, like Sega version
- - improve the scalers:
-   + scale entire screen image rather than individual tiles
-   + correct for aspect ratio
+ - More sound effects
+ - Support for higher-resolution tile sets
+ - Allow the map view to display more of the world
+ - Menu-based interface, like Sega version
+ - Use GPU for all rendering.
+ - Formal modding system to extend the world or create entirely new adventures.
 
 
 Compiling
 ---------
 
-To build on Linux and macOS use these commands:
+To build the binary on Linux and macOS use these commands:
 
     ./configure
     make
 
-To see the configure options run:
+> **_NOTE_:** The macOS build is currently broken.
 
-    ./configure -h
+If the required libraries & headers are present, make will create the
+executable `src/xu4`.
 
-If the required libraries & headers are present, make will create an
-executable called `xu4` in the src directory.
-
-The Allegro 5 build requires the allegro, allegro_audio, & allegro_acodec
-libraries & headers.
-
-To use SDL 1.2, the SDL & SDL_mixer libraries are required.  TiMidity++ may
-be necessary on some platforms, too.
-
-The libxml2 development files are necessary regardless of what platform API
-is used.
+For more detailed build instructions see [doc/build.md](doc/build.md).
 
 
 Running
@@ -98,10 +82,10 @@ zipfile.
 
 xu4 searches for the zipfiles, or the unpacked contents of the
 zipfiles in the following places:
- - the current directory when u4 is run
- - a subdirectory named "ultima4" of the current directory
- - "/usr/lib/u4/ultima4/"
- - "/usr/local/lib/u4/ultima4/"
+ - The current directory when xu4 is run
+ - A subdirectory named `ultima4` of the current directory
+ - On UNIX systems: `/usr/share/xu4` & `/usr/local/share/xu4`
+ - On Linux `$HOME/.local/share/xu4` may also be used
 
 The zipfile doesn't need to be unpacked, but if it is, xu4 can handle
 uppercase or lowercase filenames even on case-sensitive filesystems,
@@ -110,44 +94,29 @@ avater.exe or even Avatar.exe.
 
 At the title screen, a configuration menu can be accessed by pressing
 'c'.  Here, the screen scale, filter, volume and other settings can be
-modified.  Note: the game must be restarted for the new settings to
-take effect.  These settings are stored in the file $HOME/.xu4rc.
+modified.  These settings are stored in `$HOME/.config/xu4/xu4rc` on Linux
+and `%APPDATA%\xu4\xu4.cfg` on Windows.
+
+The saved game files are stored in the settings directory.
 
 xu4 also accepts the following command line options:
 
-    --fullscreen     Fullscreen mode.
-    -f
+        --filter <string>   Specify display filtering mode.
+                            (point, HQX, xBR-lv2)
+    -f, --fullscreen        Run in fullscreen mode.
+    -h, --help              Print this message and quit.
+    -i, --skip-intro        Skip the intro. and load the last saved game.
+    -m, --module <file>     Specify game module (default is Ultima-IV).
+    -p, --profile <string>  Use another set of settings and save files.
+    -q, --quiet             Disable audio.
+    -s, --scale <int>       Specify display scaling factor (1-5).
+    -v, --verbose           Enable verbose console output.
 
-    --filter <str>   Apply a filter on the scaled images. The <str>
-                     parameter must be set to one of the following
-                     case-sensitive options:
-                         point
-                         2xBi
-                         2xSaI
-                         Scale2x
+### Profiles
 
-    --skip-intro     Skip the intro, and go directly into the game.
-    -i               This option requires the existance of a valid saved
-                     game.
-
-    --profile <str>  Activate a specific save game profile.  Using this
-    -p <str>         option, you may have multiple saved games at the
-                     same time.
-                      * Use quotation marks around profile names that
-                        include spaces.
-                      * All profiles are stored in the "profiles"
-                        sub-directory.
-                      * The active profile name is shown on the
-                        introduction map view off the main menu.
-
-    --quiet          Quiet mode - no sound or music.
-    -q
-
-    --scale <n>      Scale the original graphics by a factor of <n>.
-    -s <n>           Factor <n> must be 1, 2, 3, 4, or 5.
-
-    --verbose        Verbose output; prints out information useful for
-    -v               trouble-shooting.
+Profiles are stored in the `profiles` sub-directory.
+Use quotation marks around profile names that include spaces.
+The active profile name is shown on the introduction map view off the main menu.
 
 
 Ultima 4 Documentation
@@ -191,6 +160,7 @@ Cheat list:
         g     goto (enter a location and xu4 teleports you there)
         h     help (displays list of available cheats)
         i     items (gives the party Items and Equipment)
+        j     joined by companions (if eligible)
         k     show karma (shows your virtues)
         l     location (displays current map and coordinates)
         m     mixtures (gives the party 99 mixtures of all spells)

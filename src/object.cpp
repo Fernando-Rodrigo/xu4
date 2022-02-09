@@ -3,16 +3,15 @@
  */
 
 #include "object.h"
+#include "event.h"
 #include "context.h"
 #include "game.h"
 #include "map.h"
 #include "screen.h"
+#include "tileset.h"
 #include "xu4.h"
 
-#ifdef GPU_RENDER
-#include "event.h"
-#include "tileset.h"
-#endif
+extern bool isPartyMember(const Object*);
 
 Object::Object(Type type) :
   tile(0),
@@ -27,11 +26,9 @@ Object::Object(Type type) :
 {}
 
 Object::~Object() {
-#ifdef GPU_RENDER
     // Must check if exiting game as the eventHandler may already be deleted.
     if (animId != ANIM_UNUSED && xu4.stage != StageExitGame)
         anim_setState(&xu4.eventHandler->flourishAnim, animId, ANIM_FREE);
-#endif
 }
 
 bool Object::setDirection(Direction d) {
@@ -47,14 +44,12 @@ void Object::placeOnMap(Map* map, const Coords& pos) {
 
     coords = prevCoords = pos;
 
-#ifdef GPU_RENDER
     /* Start frame animation */
     if (animId == ANIM_UNUSED) {
         const Tile* tileDef = map->tileset->get(tile.id);
         if (tileDef)
             animId = tileDef->startFrameAnim();
     }
-#endif
 }
 
 /*
@@ -65,10 +60,13 @@ void Object::placeOnMap(Map* map, const Coords& pos) {
 void Object::removeFromMaps() {
     Location* loc = c->location;
     while (onMaps && loc) {
-        if (loc->map->removeObject(this, onMaps == 1))
+        if (loc->map->removeObject(this, false))
             --onMaps;
         loc = loc->prev;
     }
+
+    if (! isPartyMember(this))
+        delete this;
 }
 
 void Object::animateMovement()
@@ -77,4 +75,13 @@ void Object::animateMovement()
     screenTileUpdate(&xu4.game->mapArea, prevCoords);
     if (screenTileUpdate(&xu4.game->mapArea, coords))
         screenWait(1);
+}
+
+/*
+ * Set frame animation state.
+ */
+void Object::animControl(int animState)
+{
+    if (animId != ANIM_UNUSED)
+        anim_setState(&xu4.eventHandler->flourishAnim, animId, animState);
 }

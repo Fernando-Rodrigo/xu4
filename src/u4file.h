@@ -1,5 +1,5 @@
 /*
- * $Id$
+ * u4file.h
  */
 
 #ifndef U4FILE_H
@@ -67,10 +67,12 @@ public:
     std::list<std::string> rootResourcePaths;
     std::list<std::string> u4ForDOSPaths;
     std::list<std::string> u4ZipPaths;
+#ifndef CONF_MODULE
     std::list<std::string> musicPaths;
     std::list<std::string> soundPaths;
     std::list<std::string> configPaths;
     std::list<std::string> graphicsPaths;
+#endif
 
 private:
     bool defaultsHaveBeenInitd;
@@ -93,7 +95,8 @@ int u4fputc(int c, U4FILE *f);
 long u4flength(U4FILE *f);
 std::vector<std::string> u4read_stringtable(U4FILE *f, long offset, int nstrings);
 
-std::string u4find_path(const std::string &fname, std::list<std::string> specificSubPaths);
+std::string u4find_path(const char* fname,
+                        const std::list<std::string>* subPaths = NULL);
 std::string u4find_music(const std::string &fname);
 std::string u4find_sound(const std::string &fname);
 std::string u4find_conf(const std::string &fname);

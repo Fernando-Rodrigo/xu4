@@ -55,6 +55,7 @@ public:
     UThread* boronThread() const;
     int scriptItemId(Symbol name);
     const void* scriptEvalArg(const char* fmt, ...);
+    int32_t npcTalk(uint32_t appId);
 #endif
     const char* modulePath() const;
     const CDIEntry* fileEntry( const char* sourceFilename ) const;
@@ -75,6 +76,7 @@ public:
     int armorType( const char* name );
     int weaponType( const char* name );
     const Creature* creature( uint32_t id ) const;
+    const Creature* creatureOfTile( TileId id ) const;
     const Creature* const* creatureTable( uint32_t* plen ) const;
     const TileRule* tileRule( Symbol name ) const;
     const Tileset* tileset() const;
@@ -87,7 +89,7 @@ protected:
     void* backend;
 };
 
-extern Config* configInit();
+extern Config* configInit(const char* module);
 extern void    configFree(Config*);
 
 #define foreach(it, col)    for(it = col.begin(); it != col.end(); ++it)

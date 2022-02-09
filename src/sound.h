@@ -10,7 +10,7 @@ enum Sound {
     SOUND_WALK_NORMAL,      // walk, world and town
     SOUND_WALK_SLOWED,      // walk, slow progress
     SOUND_WALK_COMBAT,      // walk, combat
-    SOUND_BLOCKED,          // location blocked
+    SOUND_BLOCKED,          // location blocked/invalid key
     SOUND_ERROR,            // error/bad command
     SOUND_PC_ATTACK,        // PC attacks
     SOUND_PC_STRUCK,        // PC damaged
@@ -25,6 +25,7 @@ enum Sound {
     SOUND_ITEM_STOLEN,      // item was stolen from a PC, food or gold
     SOUND_LBHEAL,           // LB heals party
     SOUND_LEVELUP,          // PC level up
+    SOUND_ELEVATE,          // Gain virtue
     SOUND_MOONGATE,         // moongate used
 
     SOUND_CANNON,
@@ -33,6 +34,9 @@ enum Sound {
     SOUND_MAGIC,
     SOUND_WHIRLPOOL,
     SOUND_STORM,
+    SOUND_GATE_OPEN,        // Intro moongate opening
+    SOUND_STONE_FALLING,
+    SOUND_WIND_GUST,
 
     //    SOUND_MISSED,
     //    SOUND_CREATUREATTACK,

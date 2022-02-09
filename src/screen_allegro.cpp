@@ -107,6 +107,7 @@ static ALLEGRO_BITMAP* loadBitmapPng(const char* filename) {
 void screenInit_sys(const Settings* settings, int* dim, int reset) {
     ScreenAllegro* sa;
 #ifdef USE_GL
+    const char* gpuError;
 #ifdef _WIN32
     // ALLEGRO_OPENGL_3_0 causes al_create_display() to fail on Windows 7 and
     // with Wine.  We check that version 3.3 calls are available below.
@@ -155,7 +156,7 @@ void screenInit_sys(const Settings* settings, int* dim, int reset) {
     }
 
     if (settings->fullscreen)
-        dflags |= ALLEGRO_FULLSCREEN;
+        dflags |= ALLEGRO_FULLSCREEN_WINDOW;
     al_set_new_display_flags(dflags);
 
 #ifdef USE_GL
@@ -163,8 +164,20 @@ void screenInit_sys(const Settings* settings, int* dim, int reset) {
 #endif
 
     sa->disp = al_create_display(dw, dh);
-    if (! sa->disp)
-        goto fatal;
+    if (! sa->disp) {
+#if 0
+        if (dflags & ALLEGRO_FULLSCREEN) {
+            // Fullscreen mode is picky about resolutions, so fallback to
+            // using a window if it fails.
+            al_set_new_display_flags(dflags & ~ALLEGRO_FULLSCREEN);
+            sa->disp = al_create_display(dw, dh);
+            if (! sa->disp)
+                goto fatal;
+            xu4.errorMessage = "Fullscreen failed! Try another scale.";
+        } else
+#endif
+            goto fatal;
+    }
 
 #if defined(_WIN32) && defined(USE_GL)
     {
@@ -185,6 +198,8 @@ void screenInit_sys(const Settings* settings, int* dim, int reset) {
 
     dim[0] = al_get_display_width(sa->disp);
     dim[1] = al_get_display_height(sa->disp);
+    dim[2] = dw;
+    dim[3] = dh;
 
     al_set_window_title(sa->disp, "Ultima IV");  // configService->gameName()
 
@@ -257,8 +272,9 @@ void screenInit_sys(const Settings* settings, int* dim, int reset) {
     // as the context is lost when mucking with bitmaps.
     al_set_current_opengl_context(sa->disp);
 
-    if (! gpu_init(&sa->gpu, dw, dh, settings->scale))
-        errorFatal("Unable to initialize OpenGL resources");
+    gpuError = gpu_init(&sa->gpu, dw, dh, settings->scale, settings->filter);
+    if (gpuError)
+        errorFatal("Unable to obtain OpenGL resource (%s)", gpuError);
 #endif
 
     sa->refreshRate = 1.0 / settings->screenAnimationFramesPerSecond;

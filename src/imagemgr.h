@@ -51,7 +51,7 @@
 #define BKGD_LOVE           ImageMgr::sym.love
 #define BKGD_COURAGE        ImageMgr::sym.courage
 #define BKGD_STONCRCL       ImageMgr::sym.stoncrcl
-#define BKGD_RUNE_INF       ImageMgr::sym.rune0
+#define BKGD_RUNE_INF       ImageMgr::sym.infinity
 #define BKGD_SHRINE_HON     ImageMgr::sym.rune1
 #define BKGD_SHRINE_COM     ImageMgr::sym.rune2
 #define BKGD_SHRINE_VAL     ImageMgr::sym.rune3
@@ -103,7 +103,7 @@ struct ImageSymbols {
     Symbol courage;
 
     Symbol stoncrcl;
-    Symbol rune0;
+    Symbol infinity;
 
     // These 8 are ordered to match visionImageNames (shrine.cpp)
     Symbol rune1;
@@ -148,6 +148,7 @@ enum ImageFixup {
     FIXUP_ABYSS,
     FIXUP_ABACUS,
     FIXUP_DUNGNS,
+    FIXUP_TRANSPARENT0,
     FIXUP_BLACKTRANSPARENCYHACK,
     FIXUP_FMTOWNSSCREEN
 };
@@ -171,7 +172,6 @@ public:
     uint8_t depth;
     uint8_t prescale;
     uint8_t filetype;
-    uint8_t transparentIndex;   /**< color index to consider transparent */
     uint8_t fixup;              /**< a routine to do miscellaneous fixes to the image */
     Image *image;               /**< the image we're describing */
 #ifdef USE_GL
@@ -211,6 +211,7 @@ public:
     void freeResourceGroup(uint16_t group);
 
     const RGBA* vgaPalette();
+    const RGBA* greyPalette();
 
 private:
     static void notice(int, void*, void*);
@@ -221,7 +222,8 @@ private:
     ImageInfo* getInfoFromSet(Symbol name, ImageSet *set);
 
     void fixupIntro(Image *im, int prescale);
-    void fixupAbyssVision(Image *im);
+    void fixupAbyssVision(Image32*);
+    void fixupTransparent(Image*, RGBA color);
     void fixupAbacus(Image *im, int prescale);
     void fixupDungNS(Image *im);
     void fixupFMTowns(Image *im);
@@ -229,7 +231,10 @@ private:
     std::map<Symbol, ImageSet *> imageSets;
     ImageSet *baseSet;
     RGBA* vgaColors;
+    RGBA* greyColors;
+    uint8_t* visionBuf;
     Debug *logger;
+    int listenerId;
     uint16_t resGroup;
 };
 

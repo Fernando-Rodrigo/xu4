@@ -9,6 +9,7 @@
 #include "u4.h"
 #include "utils.h"
 #include "tile.h"
+#include "xu4.h"
 
 
 void TileAnimTransform::draw(Image* dest, const Tile* tile,
@@ -52,12 +53,24 @@ void TileAnimTransform::draw(Image* dest, const Tile* tile,
         break;
 
     case ATYPE_FRAME:
-        // Advance the frame by one and draw it!
-        if (++var.frame.current >= tile->getFrames())
-            var.frame.current = 0;
+    {
+        int frame;
+        if (xu4.stage == StagePlay) {
+            // flourishAnim drives Object frame animation.
+            frame = mapTile.frame;
+        } else {
+            // The Intro map uses this older code which shares a single
+            // frame counter for all tiles.
+
+            // Advance the frame by one and draw it!
+            if (++var.frame.current >= tile->getFrames())
+                var.frame.current = 0;
+            frame = var.frame.current;
+        }
         tile->getImage()->drawSubRectOn(dest, 0, 0,
-                0, var.frame.current * tile->getHeight(),
+                0, frame * tile->getHeight(),
                 tile->getWidth(), tile->getHeight());
+    }
         break;
 #if 0
     case ATYPE_PIXEL:
@@ -84,6 +97,11 @@ void TileAnimTransform::draw(Image* dest, const Tile* tile,
         diff.r -= start.r;
         diff.g -= start.g;
         diff.b -= start.b;
+#if 0
+        printf( "PC color %d,%d,%d\n", start.r, start.g, start.b );
+        printf( "   end   %d,%d,%d\n", end.r, end.g, end.b );
+        printf( "   diff  %d,%d,%d\n", diff.r, diff.g, diff.b );
+#endif
 
         for (int j = y; j < y + h; j++) {
             for (int i = x; i < x + w; i++) {

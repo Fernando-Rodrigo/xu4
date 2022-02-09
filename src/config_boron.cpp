@@ -29,7 +29,7 @@
 #include "u4file.h"
 #include "xu4.h"
 
-//#include "config_dump.cpp"
+#include "config_data.cpp"
 
 // Order matches config context in pack-xu4.b.
 enum ConfigValues
@@ -68,17 +68,40 @@ void Config::setGame(const char* name) {
 #endif
 
 //--------------------------------------
+
+#define TALK_CACHE_SIZE 2
+
+struct NpcTalkCache
+{
+    UIndex blkN;
+    uint32_t appId[TALK_CACHE_SIZE];
+    int lastUsed;
+};
+
+static void npcTalk_init(NpcTalkCache* tc, UThread* ut) {
+    memset(tc, 0, sizeof(NpcTalkCache));
+
+    tc->blkN = ur_makeBlock(ut, TALK_CACHE_SIZE);
+    ur_hold(tc->blkN);      // Keep forever.
+
+    UBuffer* blk = ur_buffer(tc->blkN);
+    ur_blkAppendNew(blk, UT_NONE);
+    ur_blkAppendNew(blk, UT_NONE);
+}
+
+//--------------------------------------
 // Boron Backend
 
 struct ConfigData
 {
-    const char* modulePath;
+    char* modulePath;
     vector<const char*> sarray;   // Temp. buffer for const char** values.
     vector<Layout> layouts;
     vector<string> schemeNames;
     Armor* armors;
     vector<Weapon*> weapons;
     vector<Creature *> creatures;
+    uint16_t* creatureTileIndex;
     vector<Map *> mapList;
     vector<Coords> moongateList;    // Moon phase map coordinates.
 
@@ -87,6 +110,7 @@ struct ConfigData
     int16_t  tileRuleDefault;
     Tileset* tileset;
     UltimaSaveIds usaveIds;
+    NpcTalkCache talk;
 
     uint16_t armorCount;
 };
@@ -389,7 +413,7 @@ static void conf_ultimaSaveIds(ConfigBoron* cfg, UltimaSaveIds* usaveIds,
 static void conf_initCity(ConfigBoron* cfg, City* city, UBlockIt& bi)
 {
     static const uint8_t cityParam[4] = {
-        // name  type  tlk_fname  personrole
+        // name  type  tlk_fname  roles
         UT_STRING, UT_WORD, UT_FILE, BLOCK_NONE
     };
     if (! validParam(bi, sizeof(cityParam), cityParam))
@@ -496,10 +520,10 @@ static std::pair<Symbol, Coords> conf_initLabel(const UCell* it)
 {
     assert(ur_is(it, UT_WORD));
     assert(ur_is(it+1, UT_COORD));
-    assert(it[1].coord.len == 3);
 
     const int16_t* pos = it[1].coord.n;
-    return std::pair<Symbol, Coords> (ur_atom(it), Coords(pos[0], pos[1], pos[2]));
+    int z = (it[1].coord.len > 2) ? pos[2] : 0;
+    return std::pair<Symbol, Coords> (ur_atom(it), Coords(pos[0], pos[1], z));
 }
 
 static Map* conf_makeMap(ConfigBoron* cfg, Tileset* tiles, UBlockIt& bi)
@@ -659,7 +683,7 @@ static Creature* conf_creature(ConfigBoron* cfg, Tileset* ts, UBlockIt& bi)
         return NULL;
 
     // numA: id leader spawnsOnDeath basehp exp encounterSize
-    // numB: attr movementAttr resists flags
+    // numB: attr movementAttr resists flags u4SaveId
     const int16_t* numA = bi.it[0].coord.n;
     const int16_t* numB = bi.it[3].coord.n;
 
@@ -692,6 +716,7 @@ static Creature* conf_creature(ConfigBoron* cfg, Tileset* ts, UBlockIt& bi)
     cr->resists    = numB[2];
     cr->ranged     = numB[3] & 1;
     cr->leavestile = numB[3] & 2;
+    cr->u4SaveId   = numB[4];
 
     if (cr->spawn)
         attr |= MATTR_SPAWNSONDEATH;
@@ -848,8 +873,9 @@ ConfigBoron::ConfigBoron(const char* modulePath)
 
     backend = &xcd;
 
+    xcd.creatureTileIndex = NULL;
     xcd.tileset = NULL;
-    xcd.modulePath = modulePath;
+    xcd.modulePath = strdup(modulePath);
     memset(&xcd.usaveIds, 0, sizeof(xcd.usaveIds));
     ur_binInit(&evalBuf, 1024);
 
@@ -919,6 +945,8 @@ fail:
     fclose(fp);
     if (error)
         errorFatal(error);
+
+    npcTalk_init(&xcd.talk, ut);
 
 
     // Load primary elements.
@@ -1026,6 +1054,10 @@ fail:
             xcd.creatures[id] = cr;
         }
         xcd.creatures.resize(last + 1);
+
+        xcd.creatureTileIndex = makeCreatureTileIndex(xcd.creatures,
+                                                      xcd.tileset,
+                                                      xcd.usaveIds);
     }
 
     // vendors
@@ -1048,6 +1080,7 @@ ConfigBoron::~ConfigBoron()
     vector<Creature *>::iterator cit;
     foreach (cit, xcd.creatures)
         delete *cit;
+    delete[] xcd.creatureTileIndex;
 
     delete[] xcd.armors;
 
@@ -1063,14 +1096,27 @@ ConfigBoron::~ConfigBoron()
     boron_freeEnv( ut );
     free(fnamBuf);
     free(toc);
+    free(xcd.modulePath);
 }
 
 //--------------------------------------
 // Config Service API
 
-// Create configService.
-Config* configInit() {
-    return new ConfigBoron("u4.mod");
+// Create Config service.
+Config* configInit(const char* module) {
+    string path;
+    int len = strlen(module) - 4;
+
+    if (len > 0 && strcmp(module + len, ".mod") == 0) {
+        path = u4find_path(module);
+    } else {
+        string mfile(module);
+        mfile += ".mod";
+        path = u4find_path(mfile.c_str());
+    }
+    if (path.empty())
+        errorFatal("Cannot find module %s", module);
+    return new ConfigBoron(path.c_str());
 }
 
 void configFree(Config* conf) {
@@ -1139,6 +1185,42 @@ int Config::scriptItemId(Symbol name) {
         return ur_int(cell);
     }
     return 0;
+}
+
+/*
+ * Load an NPC Talk chunk from the game module (or overlay).
+ * Return block buffer index or UR_INVALID_BUF.
+ */
+int32_t Config::npcTalk(uint32_t appId) {
+    NpcTalkCache& talk = CB->talk;
+    UThread* ut = CX->ut;
+    UCell* talkCell = ur_buffer(talk.blkN)->ptr.cell;
+    int n;
+    for (n = 0; n < TALK_CACHE_SIZE; ++n) {
+        if (talk.appId[n] == appId) {
+            talk.lastUsed = n;
+            return talkCell[n].series.buf;
+        }
+    }
+
+    const CDIEntry* ent = cdi_findAppId(CX->toc, CX->tocUsed, appId);
+    if (ent) {
+        uint8_t* buf;
+        UStatus ok;
+        FILE* fp = fopen(CB->modulePath, "rb");
+        if (fp) {
+            buf = cdi_loadPakChunk(fp, ent);
+            fclose(fp);
+            if (buf) {
+                talk.lastUsed ^= 1;
+                talkCell += talk.lastUsed;
+                ok = ur_unserialize(ut, buf, buf + ent->bytes, talkCell);
+                free(buf);
+                return (ok == UR_OK) ? talkCell->series.buf : UR_INVALID_BUF;
+            }
+        }
+    }
+    return UR_INVALID_BUF;
 }
 
 const char* Config::modulePath() const {
@@ -1270,6 +1352,20 @@ int Config::weaponType( const char* name ) {
 const Creature* Config::creature( uint32_t id ) const {
     if (id < CB->creatures.size())
         return CB->creatures[id];
+    return NULL;
+}
+
+/**
+ * Returns the creature of the corresponding TileId or NULL if not found.
+ */
+const Creature* Config::creatureOfTile( TileId tid ) const {
+    const ConfigData* cd = CB;
+    assert(tid < cd->tileset->tileCount);
+
+    uint16_t n = cd->creatureTileIndex[tid];
+    if (n < cd->creatures.size())
+        return cd->creatures[n];
+    //printf("creatureOfTile %d NULL\n", tid);
     return NULL;
 }
 
@@ -1424,7 +1520,6 @@ static ImageInfo* loadImageInfo(const ConfigBoron* cfg, UBlockIt& bi) {
     info->height   = numA[1];
     info->subImageCount = 0;
     info->prescale = 0;
-    info->transparentIndex = -1;
     info->image    = NULL;
     info->subImages = NULL;
 

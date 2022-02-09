@@ -21,17 +21,21 @@ using std::string;
 
 Image *screenScale(Image *src, int scale, int n, int filter);
 
-//#define dprint  printf
-
 
 ImageSymbols ImageMgr::sym;
 
-ImageMgr::ImageMgr() : vgaColors(NULL), resGroup(0) {
+ImageMgr::ImageMgr() :
+    vgaColors(NULL), greyColors(NULL), visionBuf(NULL),
+    resGroup(0) {
+#ifdef TRACE_ON
     logger = new Debug("debug/imagemgr.txt", "ImageMgr");
     TRACE(*logger, "creating ImageMgr");
+#else
+    logger = NULL;
+#endif
 
     notice(SENDER_SETTINGS, xu4.settings, this);
-    gs_listen(1<<SENDER_SETTINGS, notice, this);
+    listenerId = gs_listen(1<<SENDER_SETTINGS, notice, this);
 
     xu4.config->internSymbols(&sym.tiles, 45,
         "tiles charset borders title options_top\n"
@@ -40,17 +44,37 @@ ImageMgr::ImageMgr() : vgaColors(NULL), resGroup(0) {
         "sachonor spirhum beasties key honesty\n"
         "compassn valor justice sacrific honor\n"
         "spirit humility truth love courage\n"
-        "stoncrcl rune0 rune1 rune2 rune3\n"
+        "stoncrcl infinity rune1 rune2 rune3\n"
         "rune4 rune5 rune6 rune7 rune8\n"
         "gemtiles moongate items blackbead whitebead");
+
+#if 0
+    // Dump images.
+    xu4.imageMgr = this;
+    char str[24];
+    Symbol* stable = &sym.key;
+    for (int i = 0; 1; ++i) {
+        ImageInfo* info = get(stable[i], true);
+        if (info && info->image) {
+            sprintf(str, "/tmp/img%02d.ppm", i);
+            info->image->save(str);
+        }
+        if (stable[i] == sym.whitebead)
+            break;
+    }
+#endif
 }
 
 ImageMgr::~ImageMgr() {
+    gs_unplug(listenerId);
+
     std::map<Symbol, ImageSet *>::iterator it;
     foreach (it, imageSets)
         delete it->second;
 
     delete[] vgaColors;
+    delete[] greyColors;
+    delete[] visionBuf;
     delete logger;
 }
 
@@ -188,32 +212,62 @@ void ImageMgr::fixupIntro(Image *im, int prescale) {
         im->fillRect(PRESCALE_4(i, 31, 1, 1), color.r, color.g, color.b);
 }
 
-void ImageMgr::fixupAbyssVision(Image *im) {
-    static unsigned int *data = NULL;
+/*
+ * Each VGA vision component must be XORed with all the previous
+ * vision components to get the actual image.
+ */
+void ImageMgr::fixupAbyssVision(Image32* img) {
+    const RGBA* palette = vgaPalette();
+    RGBA* cp = (RGBA*) img->pixels;
+    int n = img->w * img->h;
+    int i, ci;
 
-    /*
-     * Each VGA vision components must be XORed with all the previous
-     * vision components to get the actual image.
-     */
-    if (data != NULL) {
-        for (int y = 0; y < im->height(); y++) {
-            for (int x = 0; x < im->width(); x++) {
-                unsigned int index;
-                im->getPixelIndex(x, y, index);
-                index ^= data[y * im->width() + x];
-                im->putPixelIndex(x, y, index);
-            }
+    if (visionBuf) {
+        for (i = 0; i < n; ++i) {
+            ci = cp->r ^ visionBuf[i];
+            visionBuf[i] = ci;
+            *cp++ = palette[ci];
         }
     } else {
-        data = new unsigned int[im->width() * im->height()];
-    }
-
-    for (int y = 0; y < im->height(); y++) {
-        for (int x = 0; x < im->width(); x++) {
-            unsigned int index;
-            im->getPixelIndex(x, y, index);
-            data[y * im->width() + x] = index;
+        visionBuf = new uint8_t[n];
+        for (i = 0; i < n; ++i) {
+            ci = cp->r;
+            visionBuf[i] = ci;
+            *cp++ = palette[ci];
         }
+    }
+}
+
+void ImageMgr::fixupTransparent(Image* img, RGBA color) {
+    uint32_t* it  = img->pixels;
+    uint32_t* end = it + (img->w * img->h);
+    uint32_t ucol, trans;
+
+    ucol = *((uint32_t*) &color);
+    color.a = 0;
+    trans = *((uint32_t*) &color);
+
+    while (it != end) {
+        if (*it == ucol)
+            *it = trans;
+        ++it;
+    }
+}
+
+static void swapColors(Image32* img, const RGBA* colorA, const RGBA* colorB) {
+    uint32_t* it  = img->pixels;
+    uint32_t* end = it + (img->w * img->h);
+    uint32_t ua, ub;
+
+    ua = *((uint32_t*) colorA);
+    ub = *((uint32_t*) colorB);
+
+    while (it != end) {
+        if (*it == ua)
+            *it = ub;
+        else if (*it == ub)
+            *it = ua;
+        ++it;
     }
 }
 
@@ -233,6 +287,13 @@ void ImageMgr::fixupAbacus(Image *im, int prescale) {
     im->fillRect(PRESCALE_4(32, 186, 1, 14), 0, 255, 80); /* green */
     im->fillRect(PRESCALE_4(24, 186, 8,  1), 0, 255, 80); /* green */
     im->fillRect(PRESCALE_4(24, 199, 8,  1), 0, 255, 80); /* green */
+
+    if (xu4.settings->videoType == "VGA") {
+        RGBA light, dark;
+        rgba_set(light, 0x55, 0xff, 0x50, 0xff);
+        rgba_set(dark,  0x58, 0x8d, 0x43, 0xff);
+        swapColors(im, &light, &dark);
+    }
 }
 
 /**
@@ -240,16 +301,10 @@ void ImageMgr::fixupAbacus(Image *im, int prescale) {
  * south.
  */
 void ImageMgr::fixupDungNS(Image *im) {
-    for (int y = 0; y < im->height(); y++) {
-        for (int x = 0; x < im->width(); x++) {
-            unsigned int index;
-            im->getPixelIndex(x, y, index);
-            if (index == 1)
-                im->putPixelIndex(x, y, 2);
-            else if (index == 2)
-                im->putPixelIndex(x, y, 1);
-        }
-    }
+    RGBA blue, green;
+    rgba_set(blue,  0, 0, 0x80, 0xff);
+    rgba_set(green, 0, 0x80, 0, 0xff);
+    swapColors(im, &blue, &green);
 }
 
 /**
@@ -351,7 +406,9 @@ U4FILE * ImageMgr::getImageFile(ImageInfo *info)
             u4fseek(file, ent->offset, SEEK_SET);
         } else
             file = NULL;
-#endif
+    } else
+        file = NULL;
+#else
     } else {
         string filename(fn);
         string pathname(u4find_graphics(filename));
@@ -360,6 +417,7 @@ U4FILE * ImageMgr::getImageFile(ImageInfo *info)
         else
             file = u4fopen_stdio(pathname.c_str());
     }
+#endif
     return file;
 }
 
@@ -530,10 +588,11 @@ ImageInfo* ImageMgr::load(ImageInfo* info, bool returnUnscaled) {
     Image *unscaled = NULL;
     if (file) {
         TRACE(*logger, string("loading image from file '") + info->filename + string("'"));
-        //dprint( "ImageMgr load %d:%s\n", resGroup, info->filename.c_str() );
+        //printf( "ImageMgr load %d:%s\n", resGroup, info->filename.c_str() );
 
         unscaled = loadImage(file, info->filetype, info->width, info->height,
-                             info->depth);
+                             (info->fixup == FIXUP_ABYSS) ? BPP_CLUT8
+                                                          : info->depth);
         u4fclose(file);
 
         if (! unscaled) {
@@ -624,6 +683,9 @@ ImageInfo* ImageMgr::load(ImageInfo* info, bool returnUnscaled) {
         break;
     case FIXUP_FMTOWNSSCREEN:
         fixupFMTowns(unscaled);
+        break;
+    case FIXUP_TRANSPARENT0:
+        fixupTransparent(unscaled, Image::black);
         break;
     case FIXUP_BLACKTRANSPARENCYHACK:
         //Apply transparency shadow hack to ultima4 ega and vga upgrade classic graphics.
@@ -727,7 +789,7 @@ void ImageMgr::freeResourceGroup(uint16_t group) {
         foreach (j, si->second->info) {
             ImageInfo *info = j->second;
             if (info->image && (info->resGroup == group)) {
-                //dprint("ImageMgr::freeRes %s\n", info->filename.c_str());
+                //printf("ImageMgr::freeRes %s\n", info->filename.c_str());
 #ifdef USE_GL
                 if (info->tex) {
                     gpu_freeTexture(info->tex);
@@ -761,6 +823,20 @@ const RGBA* ImageMgr::vgaPalette() {
         u4fclose(pal);
     }
     return vgaColors;
+}
+
+/**
+ * Return a palette where color is equal to CLUT index.
+ */
+const RGBA* ImageMgr::greyPalette() {
+    if (! greyColors) {
+        greyColors = new RGBA[256];
+        for (int i = 0; i < 256; i++) {
+            greyColors[i].r = greyColors[i].g = greyColors[i].b = i;
+            greyColors[i].a = 255;
+        }
+    }
+    return greyColors;
 }
 
 /**

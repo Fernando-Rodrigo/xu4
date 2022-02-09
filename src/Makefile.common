@@ -21,15 +21,11 @@ CXXSRCS=\
         combat.cpp \
         controller.cpp \
         context.cpp \
-        conversation.cpp \
         creature.cpp \
         death.cpp \
         debug.cpp \
-        dialogueloader.cpp \
-        dialogueloader_hw.cpp \
-        dialogueloader_lb.cpp \
-        dialogueloader_tlk.cpp \
         direction.cpp \
+        discourse.cpp \
         dungeon.cpp \
         dungeonview.cpp \
         error.cpp \
@@ -79,7 +75,7 @@ CXXSRCS=\
         $(NULL)
 
 ifeq ($(CONF),xml)
-	CXXSRCS+=config.cpp script_xml.cpp xml.cpp support/SymbolTable.cpp
+	CXXSRCS+=config_xml.cpp script_xml.cpp xml.cpp support/SymbolTable.cpp
 else
 	CSRCS+=support/cdi.c
 	CXXSRCS+=config_boron.cpp

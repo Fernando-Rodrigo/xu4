@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "controller.h"
+#include "discourse.h"
 #include "event.h"
 #include "map.h"
 #include "sound.h"
@@ -23,10 +24,9 @@ class MoveEvent;
 typedef enum {
     VIEW_NORMAL,
     VIEW_GEM,
-    VIEW_RUNE,
     VIEW_DUNGEON,
-    VIEW_DEAD,
-    VIEW_CODEX,
+    VIEW_CUTSCENE,
+    VIEW_CUTSCENE_MAP,
     VIEW_MIXTURES
 } ViewMode;
 
@@ -104,8 +104,9 @@ public:
     static void flashTile(const Coords &coords, Symbol tilename, int timeFactor);
 
     TileView mapArea;
-    bool paused;
-    int pausedTimer;
+    Discourse vendorDisc;
+    Discourse castleDisc;
+    bool cutScene;
 
 private:
     static void gameNotice(int, void*, void*);
@@ -157,6 +158,7 @@ void gameCreatureCleanup(void);
 bool gameSpawnCreature(const class Creature *m);
 
 /* etc */
+void gameBadCommand();
 string gameGetInput(int maxlen = 32);
 int gameGetPlayer(bool canBeDisabled, bool canBeActivePlayer);
 void gameGetPlayerForCommand(bool (*commandFn)(int player), bool canBeDisabled, bool canBeActivePlayer);

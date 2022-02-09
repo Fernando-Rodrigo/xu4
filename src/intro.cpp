@@ -659,17 +659,63 @@ void IntroController::drawBeastie(int beast, int vertoffset, int frame) {
  * over the image.  If frame is "items", the second overlay is
  * painted: the circle without the moongate, but with a small white
  * dot representing the anhk and history book.
- *
- * TODO: Animate the moongate opening & closing to match the actual game.
  */
 void IntroController::animateTree(Symbol frame) {
-    backgroundArea.draw(frame, 72, 68);
+    SCALED_VAR
+    int fi, fcount;
+    int gateH, deltaH;
+    int x, y, ytop;
+    const SubImage* subimage;
+    ImageInfo *info = xu4.imageMgr->imageInfo(IMG_MOONGATE, &subimage);
+    if (! subimage)
+        return;
+
+    // Hack to account for different tree images.
+    if (xu4.settings->videoType == "EGA") {
+        x = 72;
+        ytop = 68;
+    } else {
+        x = 84;
+        ytop = 53;
+    }
+
+    y = ytop + subimage->height;
+    fcount = subimage->height;
+
+    if (frame == IMG_MOONGATE) {
+        soundPlay(SOUND_GATE_OPEN);
+        gateH = 1;
+        deltaH = 1;
+    } else {
+        gateH = subimage->height - 1;
+        deltaH = -1;
+    }
+
+    for (fi = 0; fi < fcount; ++fi) {
+        if (deltaH < 0)
+            backgroundArea.draw(frame, x, ytop);
+
+        info->image->drawSubRect(SCALED(x), SCALED(y - gateH),
+                                 SCALED(subimage->x) / info->prescale,
+                                 SCALED(subimage->y) / info->prescale,
+                                 SCALED(subimage->width) / info->prescale,
+                                 SCALED(gateH) / info->prescale);
+        gateH += deltaH;
+        if (gateH < 0)
+            gateH = 0;
+        else if (gateH > subimage->height)
+            gateH = subimage->height;
+
+        screenUploadToGPU();
+        if (EventHandler::wait_msecs(42))
+            break;
+    }
 }
 
 /**
  * Draws the cards in the character creation sequence with the gypsy.
  */
-void IntroController::drawCard(int pos, int card) {
+void IntroController::drawCard(int pos, int card, const uint8_t* origin) {
     static const char *cardNames[] = {
         "honestycard", "compassioncard", "valorcard", "justicecard",
         "sacrificecard", "honorcard", "spiritualitycard", "humilitycard"
@@ -679,19 +725,27 @@ void IntroController::drawCard(int pos, int card) {
     ASSERT(card < 8, "invalid card: %d", card);
 
     backgroundArea.draw(xu4.config->intern(cardNames[card]),
-                        pos ? 218 : 12, 12);
+                        pos ? origin[2] : origin[0], origin[1]);
 }
 
 /**
  * Draws the beads in the abacus during the character creation sequence
  */
 void IntroController::drawAbacusBeads(int row, int selectedVirtue, int rejectedVirtue) {
+    static const uint8_t positionTable[8] = {
+        128, 9, 24, 15,     // EGA
+        128, 8, 18, 16,     // VGA
+    };
     ASSERT(row >= 0 && row < 7, "invalid row: %d", row);
     ASSERT(selectedVirtue < 8 && selectedVirtue >= 0, "invalid virtue: %d", selectedVirtue);
     ASSERT(rejectedVirtue < 8 && rejectedVirtue >= 0, "invalid virtue: %d", rejectedVirtue);
 
-    backgroundArea.draw(IMG_WHITEBEAD, 128 + (selectedVirtue * 9), 24 + (row * 15));
-    backgroundArea.draw(IMG_BLACKBEAD, 128 + (rejectedVirtue * 9), 24 + (row * 15));
+    const uint8_t* pos = positionTable;
+    if (xu4.settings->videoType == "VGA")
+        pos += 4;
+    int y = pos[2] + (row * pos[3]);
+    backgroundArea.draw(IMG_WHITEBEAD, pos[0] + (selectedVirtue * pos[1]), y);
+    backgroundArea.draw(IMG_BLACKBEAD, pos[0] + (rejectedVirtue * pos[1]), y);
 }
 
 /**
@@ -721,7 +775,8 @@ void IntroController::updateScreen() {
         // if there is an error message to display, show it
         if (xu4.errorMessage)
         {
-            menuArea.textAt(6, 5, xu4.errorMessage);
+            int len = strlen(xu4.errorMessage);
+            menuArea.textAt(19 - len / 2, 5, xu4.errorMessage);
             xu4.errorMessage = NULL;
 
             drawBeasties();
@@ -807,6 +862,11 @@ void IntroController::initiateNewGame() {
     else
         sex = SEX_FEMALE;
 
+    // Display entry for a moment.
+    menuArea.drawChar(toupper(sexChoice), 28, 3);
+    screenUploadToGPU();
+    EventHandler::wait_msecs(250);
+
     finishInitiateGame(nameBuffer, sex);
 }
 
@@ -855,7 +915,6 @@ void IntroController::finishInitiateGame(const string &nameBuffer, SexType sex)
     strcpy(avatar.name, nameBuffer.c_str());
     avatar.sex = sex;
     saveGame.init(&avatar);
-    screenHideCursor();
     initPlayers(&saveGame);
     saveGame.food = 30000;
     saveGame.gold = 200;
@@ -879,25 +938,20 @@ void IntroController::finishInitiateGame(const string &nameBuffer, SexType sex)
 #ifdef IOS
     U4IOS::switchU4IntroControllerToContinueButton();
 #endif
-    ReadChoiceController pauseController("");
-    xu4.eventHandler->pushController(&pauseController);
-    pauseController.waitFor();
+    anyKey.wait();
 
     showText(binData->introGypsy[GYP_SEGUE2]);
-
-    xu4.eventHandler->pushController(&pauseController);
-    pauseController.waitFor();
+    anyKey.wait();
 
     // done: exit intro and let game begin
     questionArea.disableCursor();
 
-    xu4.stage = StagePlay;
+    if (xu4.stage != StageExitGame)
+        xu4.stage = StagePlay;
     xu4.eventHandler->setControllerDone();
 }
 
 void IntroController::showStory() {
-    ReadChoiceController pauseController("");
-
     beastiesVisible = false;
 
     questionArea.setCursorFollowsText(true);
@@ -905,10 +959,6 @@ void IntroController::showStory() {
     for (int storyInd = 0; storyInd < 24; storyInd++) {
         if (storyInd == 0)
             backgroundArea.draw(BKGD_TREE);
-        else if (storyInd == 3)
-            animateTree(IMG_MOONGATE);
-        else if (storyInd == 5)
-            animateTree(IMG_ITEMS);
         else if (storyInd == 6)
             backgroundArea.draw(BKGD_PORTAL);
         else if (storyInd == 11)
@@ -926,10 +976,17 @@ void IntroController::showStory() {
 
         showText(binData->introText[storyInd]);
 
-        xu4.eventHandler->pushController(&pauseController);
+        if (storyInd == 3) {
+            questionArea.disableCursor();
+            animateTree(IMG_MOONGATE);
+        } else if (storyInd == 5) {
+            questionArea.disableCursor();
+            animateTree(IMG_ITEMS);
+        }
+
         // enable the cursor here to avoid drawing in undesirable locations
         questionArea.enableCursor();
-        pauseController.waitFor();
+        anyKey.wait();
         if (xu4.stage != StageIntro)
             break;
     }
@@ -940,39 +997,60 @@ void IntroController::showStory() {
  * characters class.
  */
 void IntroController::startQuestions() {
-    ReadChoiceController pauseController("");
+    static uint8_t originTable[6] = {
+        12, 12, 218,    // EGA
+        22, 16, 218,    // VGA
+    };
     ReadChoiceController questionController("ab");
+    uint8_t* origin = originTable;
+    if (xu4.settings->videoType == "VGA")
+        origin += 3;
 
     questionRound = 0;
     initQuestionTree();
 
-    while (1) {
+    const vector<string>& gypsyText = binData->introGypsy;
+    int i1, i2, n;
+
+    while (xu4.stage == StageIntro) {
         // draw the abacus background, if necessary
-        if (questionRound == 0)
+        if (questionRound == 0) {
             backgroundArea.draw(BKGD_ABACUS);
+            n = GYP_PLACES_FIRST;
+        } else {
+            n = (questionRound == 6) ? GYP_PLACES_LAST : GYP_PLACES_TWOMORE;
+        }
+
+        i1 = questionRound * 2;
+        i2 = i1 + 1;
 
         // draw the cards and show the lead up text
-        drawCard(0, questionTree[questionRound * 2]);
-        drawCard(1, questionTree[questionRound * 2 + 1]);
 
+        questionArea.disableCursor();
         questionArea.clear();
-        questionArea.textAt(0, 0, "%s", binData->introGypsy[questionRound == 0 ? GYP_PLACES_FIRST : (questionRound == 6 ? GYP_PLACES_LAST : GYP_PLACES_TWOMORE)].c_str());
-        questionArea.textAt(0, 1, "%s", binData->introGypsy[GYP_UPON_TABLE].c_str());
-        questionArea.textAt(0, 2, "%s and %s.  She says",
-                            binData->introGypsy[questionTree[questionRound * 2] + 4].c_str(),
-                            binData->introGypsy[questionTree[questionRound * 2 + 1] + 4].c_str());
+        questionArea.textAt(0, 0, gypsyText[n].c_str());
+        questionArea.textAt(0, 1, gypsyText[GYP_UPON_TABLE].c_str());
+        EventHandler::wait_msecs(1000);
+
+        const string& virtue1 = gypsyText[questionTree[i1] + 4];
+        questionArea.textAt(0, 2, "%s and", virtue1.c_str());
+        drawCard(0, questionTree[i1], origin);
+        EventHandler::wait_msecs(1000);
+
+        questionArea.textAt(virtue1.size() + 4, 2, " %s.  She says",
+                            gypsyText[questionTree[i2] + 4].c_str());
+        drawCard(1, questionTree[i2], origin);
         questionArea.textAt(0, 3, "\"Consider this:\"");
+        questionArea.enableCursor();
 
 #ifdef IOS
         U4IOS::switchU4IntroControllerToContinueButton();
 #endif
         // wait for a key
-        xu4.eventHandler->pushController(&pauseController);
-        pauseController.waitFor();
+        anyKey.wait();
 
-        screenEnableCursor();
         // show the question to choose between virtues
-        showText(getQuestion(questionTree[questionRound * 2], questionTree[questionRound * 2 + 1]));
+        showText(getQuestion(questionTree[i1], questionTree[i2]));
 
 #ifdef IOS
         U4IOS::switchU4IntroControllerToABButtons();
@@ -982,9 +1060,8 @@ void IntroController::startQuestions() {
         int choice = questionController.waitFor();
 
         // update the question tree
-        if (doQuestion(choice == 'a' ? 0 : 1)) {
+        if (doQuestion(choice == 'a' ? 0 : 1))
             return;
-        }
     }
 }
 
@@ -1041,7 +1118,7 @@ void IntroController::about() {
     menuArea.textAt(4, 9, "Copyright \011 1987, Lord British");
     drawBeasties();
 
-    ReadChoiceController::get("");
+    anyKey.wait();
 
     screenShowCursor();
     updateScreen();
@@ -1442,7 +1519,7 @@ bool IntroController::doQuestion(int answer) {
         questionTree[answerInd] = questionTree[questionRound * 2 + 1];
 
     drawAbacusBeads(questionRound, questionTree[answerInd],
-        questionTree[questionRound * 2 + ((answer) ? 0 : 1)]);
+                    questionTree[questionRound * 2 + ((answer) ? 0 : 1)]);
 
     answerInd++;
     questionRound++;

@@ -27,6 +27,10 @@
 #include "macosx/osxinit.h"
 #endif
 
+#if defined(_WIN32) && defined(DEBUG)
+#include "win32console.c"
+#endif
+
 #ifdef DEBUG
 extern int gameSave(const char*);
 #endif
@@ -49,6 +53,7 @@ struct Options {
     uint16_t used;
     uint32_t scale;
     uint8_t  filter;
+    const char* module;
     const char* profile;
     const char* recordFile;
 };
@@ -74,6 +79,14 @@ int parseOptions(Options* opt, int argc, char** argv) {
                 goto missing_value;
             opt->scale = strtoul(argv[i], NULL, 0);
         }
+#ifdef CONF_MODULE
+        else if (strEqualAlt(argv[i], "-m", "--module"))
+        {
+            if (++i >= argc)
+                goto missing_value;
+            opt->module = argv[i];
+        }
+#endif
         else if (strEqualAlt(argv[i], "-p", "--profile"))
         {
             if (++i >= argc)
@@ -106,13 +119,21 @@ int parseOptions(Options* opt, int argc, char** argv) {
                    "v%s (%s)\n\n", VERSION, __DATE__ );
             printf(
             "Options:\n"
-            "      --filter <string>   Specify display filtering options.\n"
+            "      --filter <string>   Specify display filtering mode.\n"
+#ifdef USE_GL
+            "                          (point, HQX, xBR-lv2)\n"
+#else
+            "                          (point, 2xBi, 2xSaI, Scale2x)\n"
+#endif
             "  -f, --fullscreen        Run in fullscreen mode.\n"
             "  -h, --help              Print this message and quit.\n"
             "  -i, --skip-intro        Skip the intro. and load the last saved game.\n"
+#ifdef CONF_MODULE
+            "  -m, --module <file>     Specify game module (default is Ultima-IV).\n"
+#endif
             "  -p, --profile <string>  Use another set of settings and save files.\n"
             "  -q, --quiet             Disable audio.\n"
-            "  -s, --scale <int>       Specify scaling factor (1-5).\n"
+            "  -s, --scale <int>       Specify display scaling factor (1-5).\n"
             "  -v, --verbose           Enable verbose console output.\n"
 #ifdef DEBUG
             "\nDEBUG Options:\n"
@@ -120,8 +141,7 @@ int parseOptions(Options* opt, int argc, char** argv) {
             "  -r, --replay <file>     Play using recorded input.\n"
             "      --test-save         Save to /tmp/xu4/ and quit.\n"
 #endif
-            "\nFilters: point, 2xBi, 2xSaI, Scale2x\n"
-            "\nHomepage: http://xu4.sourceforge.com\n");
+            "\nHomepage: http://xu4.sourceforge.net\n");
 
             return 0;
         }
@@ -194,7 +214,7 @@ void servicesInit(XU4GameServices* gs, Options* opt) {
 
     Debug::initGlobal("debug/global.txt");
 
-    gs->config = configInit();
+    gs->config = configInit(opt->module ? opt->module : "Ultima-IV.mod");
     screenInit();
     Tile::initSymbols(gs->config);
 
@@ -245,6 +265,9 @@ XU4GameServices xu4;
 int main(int argc, char *argv[]) {
 #if defined(MACOSX)
     osxInit(argv[0]);
+#endif
+#if defined(_WIN32) && defined(DEBUG)
+    redirectIOToConsole();
 #endif
     //printf("sizeof(Tile) %ld\n", sizeof(Tile));
 

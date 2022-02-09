@@ -120,6 +120,7 @@ void screenGemUpdate(void);
 
 void screenCrLf();
 void screenMessage(const char *fmt, ...) PRINTF_LIKE(1, 2);
+void screenMessageN(const char* buffer, int buflen);
 void screenPrompt(void);
 void screenRedrawMapArea(void);
 void screenShake(int iterations);
@@ -143,12 +144,15 @@ void screenHideCursor(void);
 void screenEnableCursor(void);
 void screenDisableCursor(void);
 void screenSetCursorPos(int x, int y);
+
 bool screenToggle3DDungeonView();
 void screenMakeDungeonView();
+void screenDetectDungeonTraps();
 
 void screenSetMouseCursor(MouseCursor cursor);
 void screenShowMouseCursor(bool visible);
-int screenPointInMouseArea(int x, int y, MouseArea *area);
+void screenPointToMouseArea(int* x, int* y);
+int  pointInMouseArea(int x, int y, MouseArea *area);
 
 Image *screenScale(Image *src, int scale, int n, int filter);
 Image *screenScaleDown(Image *src, int scale);

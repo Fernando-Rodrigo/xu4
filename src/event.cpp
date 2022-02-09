@@ -14,21 +14,34 @@
 #include "location.h"
 #include "savegame.h"
 #include "screen.h"
+#include "sound.h"
 #include "textview.h"
+#include "u4.h"
 #include "xu4.h"
+
+static void frameSleepInit(FrameSleep* fs, int frameDuration) {
+    fs->frameInterval = frameDuration;
+    fs->realTime = 0;
+    for (int i = 0; i < 8; ++i)
+        fs->ftime[i] = frameDuration;
+    fs->ftimeSum = frameDuration * 8;
+    fs->ftimeIndex = 0;
+    fs->fsleep = frameDuration - 6;
+}
 
 /**
  * Constructs the event handler object.
  */
 EventHandler::EventHandler(int gameCycleDuration, int frameDuration) :
     timerInterval(gameCycleDuration),
-    frameInterval(frameDuration),
     runRecursion(0),
     updateScreen(NULL)
 {
     controllerDone = ended = false;
     anim_init(&flourishAnim, 64, NULL, NULL);
     anim_init(&fxAnim, 32, NULL, NULL);
+    frameSleepInit(&fs, frameDuration);
+
 #ifdef DEBUG
     recordFP = -1;
     recordMode = 0;
@@ -116,12 +129,11 @@ void EventHandler::setController(Controller *c) {
 }
 
 /**
- * Adds a key handler to the stack.
+ * Adds a key handler controller to the stack.
  */
-void EventHandler::pushKeyHandler(KeyHandler kh) {
-    KeyHandler *new_kh = new KeyHandler(kh);
-    KeyHandlerController *khc = new KeyHandlerController(new_kh);
-    pushController(khc);
+void EventHandler::pushKeyHandler(KeyHandler::Callback func, void* data) {
+    KeyHandler* kh = new KeyHandler(func, data);
+    pushController(kh);
 }
 
 /**
@@ -136,34 +148,6 @@ void EventHandler::popKeyHandler() {
     popController();
 }
 
-/**
- * Returns a pointer to the current key handler.
- * Returns NULL if there is no key handler.
- */
-KeyHandler *EventHandler::getKeyHandler() const {
-    if (controllers.empty())
-        return NULL;
-
-    KeyHandlerController *khc = dynamic_cast<KeyHandlerController *>(controllers.back());
-    ASSERT(khc != NULL, "EventHandler::getKeyHandler called when controller wasn't a keyhandler");
-    if (khc == NULL)
-        return NULL;
-
-    return khc->getKeyHandler();
-}
-
-/**
- * Eliminates all key handlers and begins stack with new handler.
- * This pops all key handlers off the stack and adds
- * the key handler provided to the stack, making it the
- * only key handler left. Use this function only if you
- * are sure the key handlers in the stack are disposable.
- */
-void EventHandler::setKeyHandler(KeyHandler kh) {
-    while (popController() != NULL) {}
-    pushKeyHandler(kh);
-}
-
 MouseArea* EventHandler::mouseAreaForPoint(int x, int y) {
     int i;
     MouseArea *areas = getMouseAreaSet();
@@ -171,8 +155,9 @@ MouseArea* EventHandler::mouseAreaForPoint(int x, int y) {
     if (!areas)
         return NULL;
 
+    screenPointToMouseArea(&x, &y);
     for (i = 0; areas[i].npoints != 0; i++) {
-        if (screenPointInMouseArea(x, y, &(areas[i]))) {
+        if (pointInMouseArea(x, y, &(areas[i]))) {
             return &(areas[i]);
         }
     }
@@ -184,6 +169,64 @@ void EventHandler::setScreenUpdate(void (*updateFunc)(void)) {
 }
 
 #include "support/getTicks.c"
+
+/*
+ * Return non-zero if waitTime has been reached or passed.
+ */
+static int frameSleep(FrameSleep* fs, uint32_t waitTime) {
+    uint32_t now;
+    int32_t elapsed, elapsedLimit, frameAdjust;
+    int i;
+
+    now = getTicks();
+    elapsed = now - fs->realTime;
+    fs->realTime = now;
+
+    elapsedLimit = fs->frameInterval * 8;
+    if (elapsed > elapsedLimit)
+        elapsed = elapsedLimit;
+
+    i = fs->ftimeIndex;
+    fs->ftimeSum += elapsed - fs->ftime[i];
+    fs->ftime[i] = elapsed;
+    fs->ftimeIndex = i ? i - 1 : FS_SAMPLES - 1;
+
+    frameAdjust = int(fs->frameInterval) - fs->ftimeSum / FS_SAMPLES;
+#if 0
+    // Adjust by 1 msec.
+    if (frameAdjust > 0) {
+        if (fs->fsleep < fs->frameInterval - 1)
+            ++fs->fsleep;
+    } else if (frameAdjust < 0) {
+        if (fs->fsleep)
+            --fs->fsleep;
+    }
+#else
+    // Adjust by 2 msec.
+    if (frameAdjust > 0) {
+        if (frameAdjust > 2)
+            frameAdjust = 2;
+        int sa = int(fs->fsleep) + frameAdjust;
+        int limit = fs->frameInterval - 1;
+        fs->fsleep = (sa > limit) ? limit : sa;
+    } else if (frameAdjust < 0) {
+        if (frameAdjust < -2)
+            frameAdjust = -2;
+        int sa = int(fs->fsleep) + frameAdjust;
+        fs->fsleep = (sa < 0) ? 0 : sa;
+    }
+#endif
+
+    if (waitTime && now >= waitTime)
+        return 1;
+#if 0
+    printf("KR fsleep %d ela:%d avg:%d adj:%d\n",
+           fs->fsleep, elapsed, fs->ftimeSum / FS_SAMPLES, frameAdjust);
+#endif
+    if (fs->fsleep)
+        msecSleep(fs->fsleep);
+    return 0;
+}
 
 /**
  * Delays program execution for the specified number of milliseconds.
@@ -200,7 +243,6 @@ bool EventHandler::wait_msecs(unsigned int msec) {
     Controller waitCon;     // Base controller consumes key events.
     EventHandler* eh = xu4.eventHandler;
     uint32_t waitTime = getTicks() + msec;
-    uint32_t now, elapsed;
 
     while (! eh->ended) {
         eh->handleInputEvents(&waitCon, NULL);
@@ -214,17 +256,11 @@ bool EventHandler::wait_msecs(unsigned int msec) {
             eh->runTime -= eh->timerInterval;
             eh->timedEvents.tick();
         }
-        eh->runTime += eh->frameInterval;
+        eh->runTime += eh->fs.frameInterval;
 
         screenSwapBuffers();
-
-        now = getTicks();
-        elapsed = now - eh->realTime;
-        eh->realTime = now;
-        if (now >= waitTime)    // Break only after realTime is updated.
+        if (frameSleep(&eh->fs, waitTime))
             break;
-        if (elapsed+2 < eh->frameInterval)
-            msecSleep(eh->frameInterval - elapsed);
     }
 
     return eh->ended;
@@ -237,14 +273,12 @@ bool EventHandler::wait_msecs(unsigned int msec) {
  * \return true if game should exit.
  */
 bool EventHandler::run() {
-    uint32_t now, elapsed;
-
     if (updateScreen)
         (*updateScreen)();
 
     if (! runRecursion) {
         runTime = 0;
-        realTime = getTicks();
+        fs.realTime = getTicks();
     }
     ++runRecursion;
 
@@ -262,15 +296,10 @@ bool EventHandler::run() {
             runTime -= timerInterval;
             timedEvents.tick();
         }
-        runTime += frameInterval;
+        runTime += fs.frameInterval;
 
         screenSwapBuffers();
-
-        now = getTicks();
-        elapsed = now - realTime;
-        realTime = now;
-        if (elapsed+2 < frameInterval)
-            msecSleep(frameInterval - elapsed);
+        frameSleep(&fs, 0);
     }
 
     --runRecursion;
@@ -282,6 +311,7 @@ bool EventHandler::run() {
 
 #ifdef _WIN32
 #include <io.h>
+#include <sys/stat.h>
 #define close   _close
 #define read    _read
 #define write   _write
@@ -586,9 +616,11 @@ ReadStringController::ReadStringController(int maxlen, int screenX, int screenY,
     }
 }
 
-bool ReadStringController::keyPressed(int key) {
-    bool valid = true;
+static void soundInvalidInput() {
+    soundPlay(SOUND_BLOCKED);
+}
 
+bool ReadStringController::keyPressed(int key) {
     if (key < MAX_BITS && TEST_BIT(accepted, key)) {
         int len = value.length();
 
@@ -606,7 +638,8 @@ bool ReadStringController::keyPressed(int key) {
                     screenSetCursorPos(screenX + len - 1, screenY);
                     screenShowCursor();
                 }
-            }
+            } else
+                soundInvalidInput();
         }
         else if (key == '\n' || key == '\r') {
             doneWaiting();
@@ -629,10 +662,15 @@ bool ReadStringController::keyPressed(int key) {
                 screenShowCursor();
             }
         }
+        else
+            soundInvalidInput();
+        return true;
+    } else {
+        bool valid = KeyHandler::defaultHandler(key, NULL);
+        if (! valid)
+            soundInvalidInput();
+        return valid;
     }
-    else valid = false;
-
-    return valid || KeyHandler::defaultHandler(key, NULL);
 }
 
 string ReadStringController::get(int maxlen, int screenX, int screenY, const char* extraChars) {
@@ -654,14 +692,13 @@ string ReadStringController::get(int maxlen, TextView *view, const char* extraCh
     return ctrl.waitFor();
 }
 
-ReadIntController::ReadIntController(int maxlen, int screenX, int screenY) : ReadStringController(maxlen, screenX, screenY, NULL, "0123456789 \n\r\010") {}
+ReadIntController::ReadIntController(int maxlen, int screenX, int screenY) :
+    ReadStringController(maxlen, screenX, screenY, NULL, "0123456789 \n\r\010")
+{}
 
-int ReadIntController::get(int maxlen, int screenX, int screenY, EventHandler *eh) {
-    if (!eh)
-        eh = xu4.eventHandler;
-
-    ReadIntController ctrl(maxlen, screenX, screenY);
-    eh->pushController(&ctrl);
+int ReadIntController::get(int maxlen) {
+    ReadIntController ctrl(maxlen, TEXT_AREA_X + c->col, TEXT_AREA_Y + c->line);
+    xu4.eventHandler->pushController(&ctrl);
     ctrl.waitFor();
     return ctrl.getInt();
 }
@@ -674,18 +711,19 @@ ReadChoiceController::ReadChoiceController(const string &choices) {
     this->choices = choices;
 }
 
+extern int screenCursorEnabled();
+
 bool ReadChoiceController::keyPressed(int key) {
     // isupper() accepts 1-byte characters, yet the modifier keys
     // (ALT, SHIFT, ETC) produce values beyond 255
     if ((key <= 0x7F) && (isupper(key)))
         key = tolower(key);
 
-    value = key;
-
-    if (choices.empty() || choices.find_first_of(value) < choices.length()) {
+    if (choices.empty() || choices.find_first_of(key) < choices.length()) {
         // If the value is printable, display it
-        if (key > ' ')
+        if (screenCursorEnabled() && key > ' ' && key <= 0x7F)
             screenMessage("%c", toupper(key));
+        value = key;
         doneWaiting();
         return true;
     }
@@ -693,12 +731,9 @@ bool ReadChoiceController::keyPressed(int key) {
     return false;
 }
 
-char ReadChoiceController::get(const string &choices, EventHandler *eh) {
-    if (!eh)
-        eh = xu4.eventHandler;
-
+char ReadChoiceController::get(const string &choices) {
     ReadChoiceController ctrl(choices);
-    eh->pushController(&ctrl);
+    xu4.eventHandler->pushController(&ctrl);
     return ctrl.waitFor();
 }
 
@@ -731,21 +766,41 @@ bool ReadDirController::keyPressed(int key) {
 }
 
 
+void AnyKeyController::wait() {
+    timerInterval = 0;
+    xu4.eventHandler->runController(this);
+}
+
+// Wait briefly (10 seconds) for a key press.
+void AnyKeyController::waitTimeout() {
+    timerInterval = 10000 / xu4.eventHandler->getTimerInterval();
+    xu4.eventHandler->runController(this);
+}
+
+bool AnyKeyController::keyPressed(int key) {
+    xu4.eventHandler->setControllerDone();
+    return true;
+}
+
+void AnyKeyController::timerFired() {
+    xu4.eventHandler->setControllerDone();
+}
+
 //----------------------------------------------------------------------------
 
 
-KeyHandler::KeyHandler(Callback func, void *d, bool asyncronous) :
-    handler(func),
-    async(asyncronous),
-    data(d)
-{}
+KeyHandler::KeyHandler(KeyHandler::Callback func, void* userData) :
+    handler(func), data(userData)
+{
+    setDeleteOnPop(true);
+}
 
 /**
  * Handles any and all keystrokes.
  * Generally used to exit the application, switch applications,
  * minimize, maximize, etc.
  */
-bool KeyHandler::globalHandler(int key) {
+bool EventHandler::globalKeyHandler(int key) {
     switch(key) {
 #if defined(MACOSX)
     case U4_META + 'q': /* Cmd+q */
@@ -796,61 +851,9 @@ bool KeyHandler::ignoreKeys(int key, void *data) {
     return true;
 }
 
-/**
- * Handles a keypress.
- * First it makes sure the key combination is not ignored
- * by the current key handler. Then, it passes the keypress
- * through the global key handler. If the global handler
- * does not process the keystroke, then the key handler
- * handles it itself by calling its handler callback function.
- */
-bool KeyHandler::handle(int key) {
-    bool processed = false;
-    if (!isKeyIgnored(key)) {
-        processed = globalHandler(key);
-        if (!processed)
-            processed = handler(key, data);
-    }
-
+bool KeyHandler::keyPressed(int key) {
+    bool processed = EventHandler::globalKeyHandler(key);
+    if (! processed)
+        processed = handler(key, data);
     return processed;
-}
-
-/**
- * Returns true if the key or key combination is always ignored by xu4
- */
-bool KeyHandler::isKeyIgnored(int key) {
-    switch(key) {
-    case U4_RIGHT_SHIFT:
-    case U4_LEFT_SHIFT:
-    case U4_RIGHT_CTRL:
-    case U4_LEFT_CTRL:
-    case U4_RIGHT_ALT:
-    case U4_LEFT_ALT:
-    case U4_RIGHT_META:
-    case U4_LEFT_META:
-    case U4_TAB:
-        return true;
-    default: return false;
-    }
-}
-
-bool KeyHandler::operator==(Callback cb) const {
-    return (handler == cb) ? true : false;
-}
-
-KeyHandlerController::KeyHandlerController(KeyHandler *handler) {
-    this->handler = handler;
-}
-
-KeyHandlerController::~KeyHandlerController() {
-    delete handler;
-}
-
-bool KeyHandlerController::keyPressed(int key) {
-    ASSERT(handler != NULL, "key handler must be initialized");
-    return handler->handle(key);
-}
-
-KeyHandler *KeyHandlerController::getKeyHandler() {
-    return handler;
 }

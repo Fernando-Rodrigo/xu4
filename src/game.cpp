@@ -8,7 +8,6 @@
 #include "cheat.h"
 #include "city.h"
 #include "config.h"
-#include "conversation.h"
 #include "debug.h"
 #include "dungeon.h"
 #include "death.h"
@@ -28,6 +27,7 @@
 #include "stats.h"
 #include "tileset.h"
 #include "u4.h"
+#include "utils.h"
 #include "weapon.h"
 #include "xu4.h"
 
@@ -47,7 +47,6 @@ void newOrder();
 
 /* conversation functions */
 bool talkAt(const Coords &coords);
-void talkRunConversation(Conversation &conv, Person *talker, bool showPrompt);
 
 /* action functions */
 bool attackAt(const Coords &coords);
@@ -57,9 +56,6 @@ bool jimmyAt(const Coords &coords);
 bool openAt(const Coords &coords);
 void wearArmor(int player = -1);
 void ztatsFor(int player = -1);
-
-/* checking functions */
-void gameLordBritishCheckLevels(void);
 
 /* creature functions */
 void gameDestroyAllCreatures(void);
@@ -117,6 +113,7 @@ bool AlphaActionController::keyPressed(int key) {
         key = toupper(key);
 
     if (key >= 'A' && key <= toupper(lastValidLetter)) {
+        screenMessage("%c\n", key);
         value = key - 'A';
         doneWaiting();
     } else if (key == U4_SPACE || key == U4_ESC || key == U4_ENTER) {
@@ -141,12 +138,21 @@ int AlphaActionController::get(char lastValidLetter, const string &prompt, Event
 
 GameController::GameController() : TurnController(1),
     mapArea(BORDER_WIDTH, BORDER_HEIGHT, VIEWPORT_W, VIEWPORT_H),
-    paused(false),
-    pausedTimer(0) {
+    cutScene(false)
+{
     gs_listen(1<<SENDER_LOCATION | 1<<SENDER_PARTY, gameNotice, this);
+
+    // Vendor scripts are shared by all cities.
+    discourse_load(&vendorDisc, "vendors");
+
+    // Custom castle dialogue will be loaded on demand.
+    discourse_init(&castleDisc);
 }
 
 GameController::~GameController() {
+    discourse_free(&vendorDisc);
+    discourse_free(&castleDisc);
+
     delete c;
     c = NULL;
 }
@@ -175,6 +181,7 @@ void GameController::initScreenWithoutReloadingState()
     xu4.imageMgr->get(BKGD_BORDERS)->image->draw(0, 0);
     c->stats->update(); /* draw the party stats */
 
+    screenEnableCursor();
     screenMessage("Press Alt-h for help\n");
     screenPrompt();
 
@@ -411,27 +418,33 @@ write_error:
  * Sets the view mode.
  */
 void gameSetViewMode(ViewMode newMode) {
+    switch (newMode) {
+        case VIEW_GEM:
+        case VIEW_CUTSCENE:
+        case VIEW_CUTSCENE_MAP:
+            xu4.game->cutScene = true;
+            break;
+        default:
+            xu4.game->cutScene = false;
+            break;
+    }
+
     c->location->viewMode = newMode;
 }
 
 void gameUpdateScreen() {
     switch (c->location->viewMode) {
     case VIEW_NORMAL:
+    case VIEW_CUTSCENE_MAP:
         screenUpdate(&xu4.game->mapArea, true, false);
         break;
     case VIEW_GEM:
         screenGemUpdate();
         break;
-    case VIEW_RUNE:
-        screenUpdate(&xu4.game->mapArea, false, false);
-        break;
     case VIEW_DUNGEON:
         screenUpdate(&xu4.game->mapArea, true, false);
         break;
-    case VIEW_DEAD:
-        screenUpdate(&xu4.game->mapArea, true, true);
-        break;
-    case VIEW_CODEX: /* the screen updates will be handled elsewhere */
+    case VIEW_CUTSCENE: /* the screen updates will be handled elsewhere */
         break;
     case VIEW_MIXTURES: /* still testing */
         break;
@@ -496,6 +509,8 @@ void GameController::setMap(Map *map, bool saveLocation, const Portal *portal, T
         City *city = dynamic_cast<City*>(map);
         city->addPeople();
     }
+
+    gameStampCommandTime();     // Restart turn Pass timer.
 }
 
 /**
@@ -527,6 +542,7 @@ int GameController::exitToParentMap() {
 #ifdef IOS
         U4IOS::updateGameControllerContext(c->location->context);
 #endif
+        gameStampCommandTime();     // Restart turn Pass timer.
         return 1;
     }
     return 0;
@@ -629,6 +645,7 @@ void GameController::flashTile(const Coords &coords, MapTile tile, int frames) {
     Map* map = c->location->map;
     map->annotations.add(coords, tile, true);
     screenTileUpdate(&xu4.game->mapArea, coords);
+    screenUploadToGPU();
 #endif
 
     EventHandler::wait_msecs(frames * 1000 /
@@ -747,13 +764,18 @@ void gameSpellEffect(int spell, int player, Sound sound) {
 
 void gameCastSpell(unsigned int spell, int caster, int param) {
     SpellCastError spellError;
-    string msg;
+    const char* msg;
 
-    if (!spellCast(spell, caster, param, &spellError, true)) {
+    if (! spellCast(spell, caster, param, &spellError, true)) {
         msg = spellGetErrorMessage(spell, spellError);
-        if (!msg.empty())
-            screenMessage("%s", msg.c_str());
+        if (msg)
+            screenMessage(msg);
     }
+}
+
+void gameBadCommand() {
+    soundPlay(SOUND_ERROR);
+    screenMessage("%cBad command%c\n", FG_GREY, FG_WHITE);
 }
 
 /**
@@ -855,13 +877,16 @@ bool GameController::keyPressed(int key) {
 
                 /* horse doubles speed (make sure we're on the same map as the previous move first) */
                 if (retval & (MOVE_SUCCEEDED | MOVE_SLOWED) &&
-                    (c->transportContext == TRANSPORT_HORSE) && c->horseSpeed) {
+                    c->transportContext == TRANSPORT_HORSE &&
+                    c->horseSpeed == HORSE_GALLOP) {
                     gameUpdateScreen(); /* to give it a smooth look of movement */
                     if (previous_map == c->location->map->fname) {
                         EventHandler::wait_msecs(166);
                         c->location->move(keyToDirection(key), false);
                     }
                 }
+                if (c->horseSpeed == HORSE_GALLOP_INTERRUPT)
+                    c->horseSpeed = HORSE_GALLOP;
 
                 endTurn = (retval & MOVE_END_TURN); /* let the movement handler decide to end the turn */
             }
@@ -886,12 +911,16 @@ bool GameController::keyPressed(int key) {
             break;
 
         case U4_FKEY+8:
+#if 1
             if (settings.debug && (c->location->context & CTX_WORLDMAP)) {
                 setMap(xu4.config->map(MAP_DECEIT), 1, NULL);
                 c->location->coords = Coords(1, 0, 7);
                 c->saveGame->orientation = DIR_SOUTH;
             }
             else valid = false;
+#else
+            screenShake(8);
+#endif
             break;
 
         case U4_FKEY+9:
@@ -1065,6 +1094,8 @@ bool GameController::keyPressed(int key) {
             break;
 
         case 'h':
+            // FIXME: The entire resting scene should not be run inside the
+            // key handler.
             holeUp();
             break;
 
@@ -1177,6 +1208,8 @@ bool GameController::keyPressed(int key) {
             U4IOS::IOSConversationHelper::setIntroString("Use which item?");
 #endif
             itemUse(gameGetInput().c_str());
+            if (settings.enhancements)
+                c->stats->setView(STATS_PARTY_OVERVIEW);
             break;
         }
 
@@ -1212,7 +1245,7 @@ bool GameController::keyPressed(int key) {
             if (c->transportContext == TRANSPORT_HORSE) {
                 if (c->horseSpeed == 0) {
                     screenMessage("Giddyup!\n");
-                    c->horseSpeed = 1;
+                    c->horseSpeed = HORSE_GALLOP;
                 } else {
                     screenMessage("Whoa!\n");
                     c->horseSpeed = 0;
@@ -1361,7 +1394,8 @@ bool GameController::keyPressed(int key) {
         case '9':
             if (settings.enhancements && settings.enhancementsOptions.activePlayer)
                 gameSetActivePlayer(key - '1');
-            else screenMessage("%cBad command!%c\n", FG_GREY, FG_WHITE);
+            else
+                gameBadCommand();
 
             endTurn = 0;
             break;
@@ -1411,6 +1445,8 @@ int gameGetPlayer(bool canBeDisabled, bool canBeActivePlayer) {
             ReadPlayerController readPlayerController;
             xu4.eventHandler->pushController(&readPlayerController);
             player = readPlayerController.waitFor();
+            if (player >= 0)
+                c->col--;   // Will display the name in place of the number
         }
 
         if (player == -1)
@@ -1420,10 +1456,10 @@ int gameGetPlayer(bool canBeDisabled, bool canBeActivePlayer) {
         }
     }
 
-    c->col--;// display the selected character name, in place of the number
     if ((player >= 0) && (player < 8))
     {
-        screenMessage("%s\n", c->saveGame->players[player].name); //Write player's name after prompt
+        // Write player's name after prompt
+        screenMessage("%s\n", c->saveGame->players[player].name);
     }
 
     if (!canBeDisabled && c->party->member(player)->isDisabled())
@@ -1998,12 +2034,19 @@ bool getChestTrapHandler(int player) {
             (c->saveGame->players[player].dex + 25 < xu4_random(100)))
         {
             Map* map = c->location->map;
+
+            // Play sound for acid & bomb since applyEffect does not.
+            if (trapType == EFFECT_LAVA || trapType == EFFECT_FIRE)
+                soundPlay(SOUND_POISON_EFFECT);
+
             if (trapType == EFFECT_LAVA) /* bomb trap */
                 c->party->applyEffect(map, trapType);
             else
                 c->party->member(player)->applyEffect(map, trapType);
+        } else {
+            soundPlay(SOUND_EVADE);
+            screenMessage("Evaded!\n");
         }
-        else screenMessage("Evaded!\n");
 
         return true;
     }
@@ -2244,17 +2287,20 @@ horse_moved:
  */
 void GameController::avatarMovedInDungeon(MoveEvent &event) {
     Dungeon *dungeon = dynamic_cast<Dungeon *>(c->location->map);
-    Direction realDir = dirNormalize((Direction)c->saveGame->orientation, event.dir);
+    Direction orientation = (Direction) c->saveGame->orientation;
+    Direction realDir = dirNormalize(orientation, event.dir);
 
     if (!xu4.settings->filterMoveMessages) {
         if (event.userEvent) {
+            const char* msg;
             if (event.result & MOVE_TURNED) {
-                if (dirRotateCCW((Direction)c->saveGame->orientation) == realDir)
-                    screenMessage("Turn Left\n");
-                else screenMessage("Turn Right\n");
+                msg = (dirRotateCCW(orientation) == realDir) ? "Turn Left\n"
+                                                             : "Turn Right\n";
+            } else {
+                /* show 'Advance' or 'Retreat' in dungeons */
+                msg = (realDir == orientation) ? "Advance\n" : "Retreat\n";
             }
-            /* show 'Advance' or 'Retreat' in dungeons */
-            else screenMessage("%s\n", realDir == c->saveGame->orientation ? "Advance" : "Retreat");
+            screenMessage(msg);
         }
 
         if (event.result & MOVE_BLOCKED)
@@ -2266,10 +2312,14 @@ void GameController::avatarMovedInDungeon(MoveEvent &event) {
         screenMessage("%cLeaving...%c\n", FG_GREY, FG_WHITE);
         exitToParentMap();
         musicPlayLocale();
+        return;
     }
 
-    /* check to see if we're entering a dungeon room */
+    if (event.result & (MOVE_SUCCEEDED | MOVE_TURNED))
+        screenDetectDungeonTraps();
+
     if (event.result & MOVE_SUCCEEDED) {
+        /* check to see if we're entering a dungeon room */
         if (dungeon->currentToken() == DUNGEON_ROOM) {
             int room = (int)dungeon->currentSubToken(); /* get room number */
 
@@ -2501,7 +2551,7 @@ void mixReagents() {
                 break;
 
             int spell = choice - 'a';
-            screenMessage("%s\n", spellGetName(spell));
+            screenMessage("\b%s\n", spellGetName(spell));
 
             // ensure the mixtures for the spell isn't already maxed out
             if (c->saveGame->mixtures[spell] == 99) {
@@ -2535,7 +2585,7 @@ bool mixReagentsForSpellU4(int spell) {
 
     screenMessage("Reagent: ");
 
-    while (1) {
+    while (xu4.stage == StagePlay) {
         int choice = ReadChoiceController::get("abcdefgh\n\r \033");
 
         // done selecting reagents? mix it up and prompt to mix
@@ -2557,9 +2607,8 @@ bool mixReagentsForSpellU4(int spell) {
             return true;
         }
 
-        screenMessage("%c\n", toupper(choice));
-        if (!ingredients.addReagent((Reagent)(choice - 'a')))
-            screenMessage("%cNone Left!%c\n", FG_GREY, FG_WHITE);
+        if (! ingredients.addReagent((Reagent)(choice - 'a')))
+            screenMessage("\n%cNone Left!%c\n", FG_GREY, FG_WHITE);
         screenMessage("Reagent: ");
     }
 
@@ -2584,7 +2633,7 @@ bool mixReagentsForSpellU5(int spell) {
 
     screenMessage("How many? ");
 
-    int howmany = ReadIntController::get(2, TEXT_AREA_X + c->col, TEXT_AREA_Y + c->line);
+    int howmany = ReadIntController::get(2);
     gameSpellMixHowMany(spell, howmany, &ingredients);
 
     return true;
@@ -2637,11 +2686,9 @@ bool gamePeerCity(int city, void *data) {
 
     if (peerMap != NULL) {
         xu4.game->setMap(peerMap, 1, NULL);
-        c->location->viewMode = VIEW_GEM;
-        xu4.game->paused = true;
-        xu4.game->pausedTimer = 0;
-
+        gameSetViewMode(VIEW_GEM);
         screenDisableCursor();
+
 #ifdef IOS
         U4IOS::IOSConversationChoiceHelper continueHelper;
         continueHelper.updateChoices(" ");
@@ -2651,8 +2698,7 @@ bool gamePeerCity(int city, void *data) {
 
         xu4.game->exitToParentMap();
         screenEnableCursor();
-        xu4.game->paused = false;
-
+        gameSetViewMode(VIEW_NORMAL);
         return true;
     }
     return false;
@@ -2673,11 +2719,9 @@ void peer(bool useGem) {
         screenMessage("Peer at a Gem!\n");
     }
 
-    xu4.game->paused = true;
-    xu4.game->pausedTimer = 0;
     screenDisableCursor();
+    gameSetViewMode(VIEW_GEM);
 
-    c->location->viewMode = VIEW_GEM;
 #ifdef IOS
     U4IOS::IOSConversationChoiceHelper continueHelper;
     continueHelper.updateChoices(" ");
@@ -2686,8 +2730,7 @@ void peer(bool useGem) {
     ReadChoiceController::get("\015 \033");
 
     screenEnableCursor();
-    c->location->viewMode = VIEW_NORMAL;
-    xu4.game->paused = false;
+    gameSetViewMode(VIEW_NORMAL);
 }
 
 /**
@@ -2695,152 +2738,38 @@ void peer(bool useGem) {
  * NPC is present at that point, zero is returned.
  */
 bool talkAt(const Coords &coords) {
-    extern int personIsVendor(const Person *person);
-    City *city;
-
     /* can't have any conversations outside of town */
-    if (!isCity(c->location->map)) {
+    City* city = static_cast<City*>(c->location->map);
+    if (! isCity(city)) {
         screenMessage("Funny, no response!\n");
         return true;
     }
 
-    city = dynamic_cast<City*>(c->location->map);
-    Person *talker = city->personAt(coords);
-
     /* make sure we have someone we can talk with */
-    if (!talker || !talker->canConverse())
+    Person* speaker = city->personAt(coords);
+    if (! speaker)
         return false;
+
+    PersonNpcType npcType = speaker->getNpcType();
+    if (speaker->isVendor()) {
+        return discourse_run(&xu4.game->vendorDisc,
+                             npcType - NPC_VENDOR_WEAPONS, speaker);
+    }
+
+    if (npcType >= NPC_LORD_BRITISH) {
+        Discourse* dis = &xu4.game->castleDisc;
+        if (! dis->convCount)
+            discourse_load(dis, "castle");
+        return discourse_run(dis, npcType - NPC_LORD_BRITISH, speaker);
+    }
 
     /* No response from alerted guards... does any monster both
        attack and talk besides Nate the Snake? */
-    if  (talker->movement == MOVEMENT_ATTACK_AVATAR &&
-         talker->getId() != PYTHON_ID)
+    if (speaker->movement == MOVEMENT_ATTACK_AVATAR &&
+        speaker->getId() != PYTHON_ID)
         return false;
 
-    /* if we're talking to Lord British and the avatar is dead, LB resurrects them! */
-    if (talker->getNpcType() == NPC_LORD_BRITISH &&
-        c->party->member(0)->getStatus() == STAT_DEAD) {
-        screenMessage("%s, Thou shalt live again!\n", c->party->member(0)->getName().c_str());
-
-        c->party->member(0)->setStatus(STAT_GOOD);
-        c->party->member(0)->heal(HT_FULLHEAL);
-        gameSpellEffect('r', -1, SOUND_LBHEAL);
-    }
-
-    Conversation conv;
-    conv.state = Conversation::INTRO;
-    conv.reply = talker->getConversationText(&conv, "");
-    conv.playerInput.erase();
-    talkRunConversation(conv, talker, false);
-
-    return true;
-}
-
-/**
- * Executes the current conversation until it is done.
- */
-void talkRunConversation(Conversation &conv, Person *talker, bool showPrompt) {
-    while (conv.state != Conversation::DONE) {
-        // TODO: instead of calculating linesused again, cache the
-        // result in person.cpp somewhere.
-        int linesused = linecount(conv.reply.front(), TEXT_AREA_W);
-        screenMessage("%s", conv.reply.front().c_str());
-        conv.reply.pop_front();
-
-        /* if all chunks haven't been shown, wait for a key and process next chunk*/
-        int size = conv.reply.size();
-        if (size > 0) {
-#ifdef IOS
-            U4IOS::IOSConversationChoiceHelper continueDialog;
-            continueDialog.updateChoices(" ");
-#endif
-            ReadChoiceController::get("");
-            continue;
-        }
-
-        /* otherwise, clear current reply and proceed based on conversation state */
-        conv.reply.clear();
-
-        /* they're attacking you! */
-        if (conv.state == Conversation::ATTACK) {
-            conv.state = Conversation::DONE;
-            talker->movement = MOVEMENT_ATTACK_AVATAR;
-        }
-
-        if (conv.state == Conversation::DONE)
-            break;
-
-        /* When Lord British heals the party */
-        else if (conv.state == Conversation::FULLHEAL) {
-            int i;
-
-            for (i = 0; i < c->party->size(); i++) {
-                c->party->member(i)->heal(HT_CURE);        // cure the party
-                c->party->member(i)->heal(HT_FULLHEAL);    // heal the party
-            }
-            gameSpellEffect('r', -1, SOUND_MAGIC); // same spell effect as 'r'esurrect
-
-            conv.state = Conversation::TALK;
-        }
-        /* When Lord British checks and advances each party member's level */
-        else if (conv.state == Conversation::ADVANCELEVELS) {
-            gameLordBritishCheckLevels();
-            conv.state = Conversation::TALK;
-        }
-
-        if (showPrompt) {
-            string prompt = talker->getPrompt(&conv);
-            if (!prompt.empty()) {
-                if (linesused + linecount(prompt, TEXT_AREA_W) > TEXT_AREA_H) {
-#ifdef IOS
-                    U4IOS::IOSConversationChoiceHelper continueDialog;
-                    continueDialog.updateChoices(" ");
-#endif
-                    ReadChoiceController::get("");
-                }
-
-                screenMessage("%s", prompt.c_str());
-            }
-        }
-
-        int maxlen;
-        switch (conv.getInputRequired(&maxlen)) {
-        case Conversation::INPUT_STRING: {
-            conv.playerInput = gameGetInput(maxlen);
-#ifdef IOS
-            screenMessage("%s", conv.playerInput.c_str()); // Since we put this in a different window, we need to show it again.
-#endif
-            conv.reply = talker->getConversationText(&conv, conv.playerInput.c_str());
-            conv.playerInput.erase();
-            showPrompt = true;
-            break;
-        }
-        case Conversation::INPUT_CHARACTER: {
-            char message[2];
-#ifdef IOS
-            U4IOS::IOSConversationChoiceHelper yesNoHelper;
-            yesNoHelper.updateChoices("yn ");
-#endif
-            int choice = ReadChoiceController::get("");
-
-
-            message[0] = choice;
-            message[1] = '\0';
-
-            conv.reply = talker->getConversationText(&conv, message);
-            conv.playerInput.erase();
-
-            showPrompt = true;
-            break;
-        }
-
-        case Conversation::INPUT_NONE:
-            conv.state = Conversation::DONE;
-            break;
-        }
-    }
-    if (conv.reply.size() > 0)
-        screenMessage("%s", conv.reply.front().c_str());
+    return discourse_run(&city->disc, speaker->discourseId(), speaker);
 }
 
 /**
@@ -2914,15 +2843,11 @@ void ztatsFor(int player) {
  * This function is called every quarter second.
  */
 void GameController::timerFired() {
-    if (pausedTimer > 0) {
-        pausedTimer--;
-        if (pausedTimer <= 0) {
-            pausedTimer = 0;
-            paused = false; /* unpause the game */
-        }
-    }
-
-    if (!paused && !pausedTimer) {
+    if (cutScene) {
+        screenCycle();
+        screenUpdateCursor();
+        screenUploadToGPU();
+    } else {
         if (++c->windCounter >= MOON_SECONDS_PER_PHASE * 4) {
             if (xu4_random(4) == 1 && !c->windLock)
                 c->windDirection = dirRandomDir(MASK_DIR_ALL);
@@ -2939,18 +2864,16 @@ void GameController::timerFired() {
         screenCycle();
         gameUpdateScreen();
 
-        c->commandTimer += 1000 / xu4.settings->gameCyclesPerSecond;
-
         /*
          * force pass if no commands within last 20 seconds
          */
         Controller *controller = xu4.eventHandler->getController();
-        if (controller &&
-            (controller == xu4.game || dynamic_cast<CombatController *>(controller) != NULL) &&
-            gameTimeSinceLastCommand() > 20) {
-
-            /* pass the turn, and redraw the text area so the prompt is shown */
-            controller->keyPressed(U4_SPACE);
+        if (dynamic_cast<TurnController *>(controller)) {
+            c->commandTimer += 1000 / xu4.settings->gameCyclesPerSecond;
+            if (gameTimeSinceLastCommand() > 20) {
+                /* pass the turn, and redraw the text area prompt */
+                controller->keyPressed(U4_SPACE);
+            }
         }
     }
 }
@@ -3396,30 +3319,6 @@ void GameController::checkBridgeTrolls() {
 }
 
 /**
- * Check the levels of each party member while talking to Lord British
- */
-void gameLordBritishCheckLevels() {
-    bool advanced = false;
-
-    for (int i = 0; i < c->party->size(); i++) {
-        PartyMember *player = c->party->member(i);
-        if (player->getRealLevel() <
-            player->getMaxLevel()) {
-
-            // add an extra space to separate messages
-            if (!advanced) {
-                screenMessage("\n");
-                advanced = true;
-            }
-
-            player->advanceLevel();
-        }
-    }
-
-    screenMessage("\nWhat would thou\nask of me?\n");
-}
-
-/**
  * Spawns a creature (m) just offscreen of the avatar.
  * If (m==NULL) then it finds its own creature to spawn and spawns it.
  */
@@ -3680,7 +3579,7 @@ mixReagentsSuper() {
       screenMessage("You can make %d.\n", (mixQty > ingQty) ? ingQty : mixQty);
       screenMessage("How many? ");
 
-      int howmany = ReadIntController::get(2, TEXT_AREA_X + c->col, TEXT_AREA_Y + c->line);
+      int howmany = ReadIntController::get(2);
 
       if (howmany == 0) {
         screenMessage("\nNone mixed!\n");

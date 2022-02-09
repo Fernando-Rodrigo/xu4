@@ -1,9 +1,9 @@
 options [
 	os_api: 'allegro	"Platform API ('allegro 'sdl)"
-	use_gl: false
+	use_gl: true
 	use_boron: true
 	boron_sdk: none		"Path to Boron headers and libraries"
-	gpu_render: true
+	gpu_render: false
 	make_util: true
 ]
 
@@ -76,7 +76,7 @@ exe %xu4 [
 	][
 		libxml2
 		sources_from %src [
-			%config.cpp
+			%config_xml.cpp
 			%script_xml.cpp
 			%xml.cpp
 			%support/SymbolTable.cpp
@@ -119,15 +119,11 @@ exe %xu4 [
 		%combat.cpp
 		%controller.cpp
 		%context.cpp
-		%conversation.cpp
 		%creature.cpp
 		%death.cpp
 		%debug.cpp
-		%dialogueloader.cpp
-		%dialogueloader_hw.cpp
-		%dialogueloader_lb.cpp
-		%dialogueloader_tlk.cpp
 		%direction.cpp
+		%discourse.cpp
 		%dungeon.cpp
 		%dungeonview.cpp
 		%error.cpp

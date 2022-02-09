@@ -1,5 +1,5 @@
 /*
- * $Id$
+ * codex.cpp
  */
 
 #include <string>
@@ -12,6 +12,7 @@
 #include "game.h"
 #include "imagemgr.h"
 #include "savegame.h"
+#include "settings.h"
 #include "screen.h"
 #include "stats.h"
 #include "u4.h"
@@ -21,113 +22,113 @@
 #include "ios_helpers.h"
 #endif
 
-using namespace std;
+struct Codex {
+    vector<std::string> virtueQuestions;
+    vector<std::string> endgameText1;
+    vector<std::string> endgameText2;
+    std::string word;
+};
 
-int codexInit();
-void codexDelete();
-void codexEject(CodexEjectCode code);
-void codexHandleWOP(const string &word);
-void codexHandleVirtues(const string &virtue);
-void codexHandleInfinity(const string &answer);
-void codexImpureThoughts();
-
-/**
- * Key handlers
- */
-bool codexHandleInfinityAnyKey(int key, void *data);
-bool codexHandleEndgameAnyKey(int key, void *data);
-
-vector<string> codexVirtueQuestions;
-vector<string> codexEndgameText1;
-vector<string> codexEndgameText2;
+static void codexEject(CodexEjectCode code);
+static bool codexHandleWOP(Codex*);
+static bool codexHandleVirtues(Codex*);
+static bool codexHandleInfinity(Codex*);
+static void codexHandleEndgame(Codex*);
 
 /**
  * Initializes the Chamber of the Codex sequence (runs from codexStart())
  */
-int codexInit() {
-    U4FILE *avatar;
-
-    avatar = u4fopen("avatar.exe");
-    if (!avatar)
+static int codexInit(Codex* codex) {
+    U4FILE* avatar = u4fopen("avatar.exe");
+    if (! avatar)
         return 0;
 
-    codexVirtueQuestions = u4read_stringtable(avatar, 0x0fc7b, 11);
-    codexEndgameText1 = u4read_stringtable(avatar, 0x0fee4, 7);
-    codexEndgameText2 = u4read_stringtable(avatar, 0x10187, 5);
-
+    codex->virtueQuestions = u4read_stringtable(avatar, 0x0fc7b, 11);
+    codex->endgameText1    = u4read_stringtable(avatar, 0x0fee4, 7);
+    codex->endgameText2    = u4read_stringtable(avatar, 0x10187, 5);
     u4fclose(avatar);
-
     return 1;
 }
 
 /**
  * Frees all memory associated with the Codex sequence
  */
-void codexDelete() {
-    codexVirtueQuestions.clear();
-    codexEndgameText1.clear();
-    codexEndgameText2.clear();
+static void codexFree(Codex* codex) {
+    codex->virtueQuestions.clear();
+    codex->endgameText1.clear();
+    codex->endgameText2.clear();
+}
+
+static void pausedMessage(int sec, const char* msg) {
+    screenMessage(msg);
+    screenUploadToGPU();
+    EventHandler::wait_msecs(sec * 1000);
+}
+
+/* slight pause before continuing */
+static void codexSlightPause() {
+    screenMessage("\n");
+    screenDisableCursor();
+    screenUploadToGPU();
+    EventHandler::wait_msecs(1000);
 }
 
 /**
  * Begins the Chamber of the Codex sequence
  */
 void codexStart() {
-    codexInit();
+    Codex codex;
+    if(! codexInit(&codex))
+        return;
 
-    /**
-     * disable the whirlpool cursor and black out the screen
-     */
+    // disable the whirlpool cursor and black out the screen
 #ifdef IOS
     U4IOS::IOSHideGameControllerHelper hideControllsHelper;
 #endif
     screenDisableCursor();
     screenUpdate(&xu4.game->mapArea, false, true);
 
-    /**
-     * make the avatar alone
-     */
+    // make the avatar alone
     c->stats->setView(STATS_PARTY_OVERVIEW);
-    c->stats->update(true);     /* show just the avatar */
+    c->stats->update(true);
 
-    /**
-     * change the view mode so the dungeon doesn't get shown
-     */
-    gameSetViewMode(VIEW_CODEX);
+    // change the view mode so the dungeon doesn't get shown
+    gameSetViewMode(VIEW_CUTSCENE);
+    musicFadeOut(1000);
 
-    screenMessage("\n\n\n\nThere is a sudden darkness, and you find yourself alone in an empty chamber.\n");
-    EventHandler::wait_msecs(4000);
+    pausedMessage(4, "\n\n\n\nThere is a sudden darkness, and you find yourself alone in an empty chamber.\n");
 
-    /**
-     * check to see if you have the 3-part key
-     */
-    if ((c->saveGame->items & (ITEM_KEY_C | ITEM_KEY_L | ITEM_KEY_T)) != (ITEM_KEY_C | ITEM_KEY_L | ITEM_KEY_T)) {
+    /* check to see if you have the 3-part key */
+    const int allKeyItems = ITEM_KEY_C | ITEM_KEY_L | ITEM_KEY_T;
+    if ((c->saveGame->items & allKeyItems) == allKeyItems) {
+        screenDrawImageInMapArea(BKGD_KEY);
+        screenRedrawMapArea();
+
+        pausedMessage(3, "\nYou use your key of Three Parts.\n");
+
+        if (codexHandleWOP(&codex)) {
+            if (codexHandleVirtues(&codex)) {
+                if (codexHandleInfinity(&codex)) {
+                    codexHandleEndgame(&codex);
+                    codexFree(&codex);
+                    xu4.eventHandler->pushKeyHandler(KeyHandler::ignoreKeys);
+                    return;     // Don't reset view mode - pause forever.
+                }
+            }
+        }
+    } else {
         codexEject(CODEX_EJECT_NO_3_PART_KEY);
-        return;
     }
 
-    screenDrawImageInMapArea(BKGD_KEY);
-    screenRedrawMapArea();
-
-    screenMessage("\nYou use your key of Three Parts.\n");
-    EventHandler::wait_msecs(3000);
-
-    screenMessage("\nA voice rings out:\n\"What is the Word of Passage?\"\n\n");
-
-    /**
-     * Get the Word of Passage
-     */
-#ifdef IOS
-    U4IOS::IOSConversationHelper::setIntroString("What is the Word of Passage?");
-#endif
-    codexHandleWOP(gameGetInput());
+    codexFree(&codex);
+    gameSetViewMode(VIEW_NORMAL);
 }
 
 /**
  * Ejects you from the chamber of the codex (and the Abyss, for that matter)
  * with the correct message.
  */
-void codexEject(CodexEjectCode code) {
+static void codexEject(CodexEjectCode code) {
     struct {
         int x, y;
     } startLocations[] = {
@@ -146,13 +147,11 @@ void codexEject(CodexEjectCode code) {
         screenMessage("\nThou dost not have the Key of Three Parts.\n\n");
         break;
     case CODEX_EJECT_NO_FULL_PARTY:
-      screenMessage("\nThou hast not proved thy leadership in all eight virtues.\n\n");
-      EventHandler::wait_msecs(2000);
-      screenMessage("\nPassage is not granted.\n\n");
-      break;
+        pausedMessage(2, "\nThou hast not proved thy leadership in all eight virtues.\n\n");
+        screenMessage("\nPassage is not granted.\n\n");
+        break;
     case CODEX_EJECT_NO_FULL_AVATAR:
-        screenMessage("\nThou art not ready.\n");
-        EventHandler::wait_msecs(2000);
+        pausedMessage(2, "\nThou art not ready.\n");
         screenMessage("\nPassage is not granted.\n\n");
         break;
     case CODEX_EJECT_BAD_WOP:
@@ -179,10 +178,8 @@ void codexEject(CodexEjectCode code) {
         break;
     }
 
+    screenUploadToGPU();
     EventHandler::wait_msecs(2000);
-
-    /* free memory associated with the Codex */
-    codexDelete();
 
     /* re-enable the cursor and show it */
     screenEnableCursor();
@@ -209,256 +206,256 @@ void codexEject(CodexEjectCode code) {
     xu4.eventHandler->setController(xu4.game);
 }
 
+static void codexImpureThoughts() {
+    pausedMessage(2, "\nThy thoughts are not pure.\nI ask again.\n");
+}
+
 /**
- * Handles entering the Word of Passage
+ * Handles entering the Word of Passage.
+ * Return true if player succeeds.
  */
-void codexHandleWOP(const string &word) {
-    static int tries = 1;
+static bool codexHandleWOP(Codex* codex) {
     int i;
 
-    xu4.eventHandler->popKeyHandler();
-
-    /* slight pause before continuing */
-    screenMessage("\n");
-    screenDisableCursor();
-    EventHandler::wait_msecs(1000);
-
-    /* entered correctly */
-    if (strcasecmp(word.c_str(), "veramocor") == 0) {
-        tries = 1; /* reset 'tries' in case we need to enter this again later */
-
-        /* eject them if they don't have all 8 party members */
-        if (c->saveGame->members != 8) {
-            codexEject(CODEX_EJECT_NO_FULL_PARTY);
-            return;
-        }
-
-        /* eject them if they're not a full avatar at this point */
-        for (i = 0; i < VIRT_MAX; i++) {
-            if (c->saveGame->karma[i] != 0) {
-                codexEject(CODEX_EJECT_NO_FULL_AVATAR);
-                return;
-            }
-        }
-
-        screenMessage("\nPassage is granted.\n");
-        EventHandler::wait_msecs(4000);
-
-        screenEraseMapArea();
-        screenRedrawMapArea();
-
-        /* Ask the Virtue questions */
-        screenMessage("\n\nThe voice asks:\n");
-        EventHandler::wait_msecs(2000);
-        screenMessage("\n%s\n\n", codexVirtueQuestions[0].c_str());
-
-        codexHandleVirtues(gameGetInput());
-
-        return;
-    }
-
-    /* entered incorrectly - give 3 tries before ejecting */
-    else if (tries++ < 3) {
-        codexImpureThoughts();
-        screenMessage("\"What is the Word of Passage?\"\n\n");
+    for (i = 0; i < 3; ++i) {
+        if (i == 0) {
+            screenMessage("\nA voice rings out:\n");
 #ifdef IOS
-        U4IOS::IOSConversationHelper::setIntroString("Which virtue?");
+            U4IOS::IOSConversationHelper::setIntroString("What is the Word of Passage?");
 #endif
-        codexHandleWOP(gameGetInput());
+        } else {
+            /* entered incorrectly - try again */
+            codexImpureThoughts();
+#ifdef IOS
+            U4IOS::IOSConversationHelper::setIntroString("Which virtue?");
+#endif
+        }
+
+        screenMessage("\"What is the Word of Passage?\"\n\n");
+        codex->word = gameGetInput();
+        codexSlightPause();
+        if (strcasecmp(codex->word.c_str(), "veramocor") == 0)
+            goto correct;
     }
 
     /* 3 tries are up... eject! */
-    else {
-        tries = 1;
-        codexEject(CODEX_EJECT_BAD_WOP);
+    codexEject(CODEX_EJECT_BAD_WOP);
+    return false;
+
+correct:
+    /* eject them if they don't have all 8 party members */
+    if (c->saveGame->members != 8) {
+        codexEject(CODEX_EJECT_NO_FULL_PARTY);
+        return false;
     }
+
+    /* eject them if they're not a full avatar at this point */
+    for (i = 0; i < VIRT_MAX; i++) {
+        if (c->saveGame->karma[i] != 0) {
+            codexEject(CODEX_EJECT_NO_FULL_AVATAR);
+            return false;
+        }
+    }
+
+    pausedMessage(4, "\nPassage is granted.\n");
+    screenEraseMapArea();
+    screenRedrawMapArea();
+    return true;
 }
 
 /**
  * Handles naming of virtues in the Chamber of the Codex
+ * Return true if player succeeds.
  */
-void codexHandleVirtues(const string &virtue) {
-    static int current = 0;
-    static int tries = 1;
+static bool codexHandleVirtues(Codex* codex) {
     const Symbol* codexImageNames = &BKGD_HONESTY;
+    int current = 0;
+    int tries = 0;
 
-    xu4.eventHandler->popKeyHandler();
-
-    /* slight pause before continuing */
-    screenMessage("\n");
+    /* Ask the Virtue questions */
+ask_next:
+    codexSlightPause();
+    pausedMessage(2, "\n\nThe voice asks:\n");
+    screenMessage("\n%s\n\n", codex->virtueQuestions[current].c_str());
+#ifdef IOS
+    U4IOS::IOSConversationHelper::setIntroString((current < VIRT_MAX) ? "Which virtue?" : "Which principle?");
+#endif
+    codex->word = gameGetInput();
     screenDisableCursor();
-    EventHandler::wait_msecs(1000);
 
-    /* answered with the correct one of eight virtues */
     if ((current < VIRT_MAX) &&
-        (strcasecmp(virtue.c_str(), getVirtueName(static_cast<Virtue>(current))) == 0)) {
+        (strcasecmp(codex->word.c_str(), getVirtueName(static_cast<Virtue>(current))) == 0)) {
+        /* answered with the correct one of eight virtues */
 
+        Image::enableBlend(1);
         screenDrawImageInMapArea(codexImageNames[current]);
+        Image::enableBlend(0);
         screenRedrawMapArea();
-
-        current++;
-        tries = 1;
+        screenUploadToGPU();
 
         EventHandler::wait_msecs(2000);
 
-        if (current == VIRT_MAX) {
-            screenMessage("\nThou art well versed in the virtues of the Avatar.\n");
-            EventHandler::wait_msecs(5000);
-        }
-
-        screenMessage("\n\nThe voice asks:\n");
-        EventHandler::wait_msecs(2000);
-        screenMessage("\n%s\n\n", codexVirtueQuestions[current].c_str());
-#ifdef IOS
-        U4IOS::IOSConversationHelper::setIntroString((current != VIRT_MAX) ? "Which virtue?" : "Which principle?");
-#endif
-        codexHandleVirtues(gameGetInput());
+        tries = 0;
+        if (++current == VIRT_MAX)
+            pausedMessage(5, "\n\nThou art well versed in the virtues of the Avatar.\n");
+        goto ask_next;
     }
-
-    /* answered with the correct base virtue (truth, love, courage) */
     else if ((current >= VIRT_MAX) &&
-             (strcasecmp(virtue.c_str(), getBaseVirtueName(static_cast<BaseVirtue>(1 << (current - VIRT_MAX)))) == 0)) {
+             (strcasecmp(codex->word.c_str(), getBaseVirtueName(static_cast<BaseVirtue>(1 << (current - VIRT_MAX)))) == 0)) {
+        /* answered with the correct base virtue (truth, love, courage) */
 
+        Image::enableBlend(1);
         screenDrawImageInMapArea(codexImageNames[current]);
+        Image::enableBlend(0);
         screenRedrawMapArea();
 
-        current++;
-        tries = 1;
+        tries = 0;
+        if (++current < VIRT_MAX+3)
+            goto ask_next;
 
-        if (current < VIRT_MAX+3) {
-            screenMessage("\n\nThe voice asks:\n");
-            EventHandler::wait_msecs(2000);
-            screenMessage("\n%s\n\n", codexVirtueQuestions[current].c_str());
-#ifdef IOS
-            U4IOS::IOSConversationHelper::setIntroString("Which principle?");
-#endif
-            codexHandleVirtues(gameGetInput());
-        }
-        else {
-            screenMessage("\nThe ground rumbles beneath your feet.\n");
-            EventHandler::wait_msecs(1000);
-            screenShake(10);
-
-            EventHandler::wait_msecs(3000);
-            screenEnableCursor();
-            screenMessage("\nAbove the din, the voice asks:\n\nIf all eight virtues of the Avatar combine into and are derived from the Three Principles of Truth, Love and Courage...");
-#ifdef IOS
-            // Ugh, we now enter happy callback land, so I know how to do these things manually. Good thing I kept these separate functions.
-            U4IOS::beginChoiceConversation();
-            U4IOS::updateChoicesInDialog(" ", "", -1);
-#endif
-            xu4.eventHandler->pushKeyHandler(&codexHandleInfinityAnyKey);
-        }
+        pausedMessage(1, "\n\nThe ground rumbles beneath your feet.\n");
+        soundPlay(SOUND_RUMBLE);
+        screenShake(10);
+        EventHandler::wait_msecs(3000);
+        return true;
     }
+    else if (++tries < 3) {
+        /* give them 3 tries to enter the correct virtue, then eject them! */
 
-    /* give them 3 tries to enter the correct virtue, then eject them! */
-    else if (tries++ < 3) {
         codexImpureThoughts();
-        screenMessage("%s\n\n", codexVirtueQuestions[current].c_str());
+        screenMessage("%s\n\n", codex->virtueQuestions[current].c_str());
 #ifdef IOS
         U4IOS::IOSConversationHelper::setIntroString("Which virtue?");
 #endif
-        codexHandleVirtues(gameGetInput());
+        goto ask_next;
     }
 
     /* failed 3 times... eject! */
-    else {
-        codexEject(static_cast<CodexEjectCode>(CODEX_EJECT_HONESTY + current));
-
-        tries = 1;
-        current = 0;
-    }
+    codexEject(static_cast<CodexEjectCode>(CODEX_EJECT_HONESTY + current));
+    return false;
 }
 
-bool codexHandleInfinityAnyKey(int key, void *data) {
-    xu4.eventHandler->popKeyHandler();
+static bool codexHandleInfinity(Codex* codex) {
+    ReadChoiceController pauseController("");
+    int i;
 
-    screenMessage("\n\nThen what is the one thing which encompasses and is the whole of all undeniable Truth, unending Love, and unyielding Courage?\n\n");
+    for (i = 0; i < 3; ++i) {
+        if (i > 0)
+            codexImpureThoughts();
+
+        screenEnableCursor();
+        screenMessage("\nAbove the din, the voice asks:\n\nIf all eight virtues of the Avatar combine into and are derived from the Three Principles of Truth, Love and Courage...");
+        screenUploadToGPU();
+
+        xu4.eventHandler->pushController(&pauseController);
+        pauseController.waitFor();
+
+        screenMessage("\n\nThen what is the one thing which encompasses and is the whole of all undeniable Truth, unending Love, and unyielding Courage?\n\n");
 #ifdef IOS
-    U4IOS::endChoiceConversation();
-    U4IOS::IOSConversationHelper::setIntroString("What is the whole of all undeniable Truth, unending Love, and unyielding Courage?");
+        U4IOS::IOSConversationHelper::setIntroString("What is the whole of all undeniable Truth, unending Love, and unyielding Courage?");
 #endif
-    codexHandleInfinity(gameGetInput());
+        codex->word = gameGetInput();
+#ifdef IOS
+        U4IOS::IOSHideGameControllerHelper hideControllsHelper;
+#endif
+        codexSlightPause();
+        if (strcasecmp(codex->word.c_str(), "infinity") == 0)
+            goto correct;
+    }
+
+    codexEject(CODEX_EJECT_BAD_INFINITY);
+    return false;
+
+correct:
+    EventHandler::wait_msecs(2000);
+    soundPlay(SOUND_RUMBLE);
+    screenShake(10);
+
+    // Split codex to reveal infinity image.
+    {
+    Image32 codexImg;
+    Image32* screen = xu4.screenImage;
+    const int mid = VIEWPORT_W * TILE_HEIGHT / 2;
+    SCALED_VAR;
+    int bx = SCALED(BORDER_WIDTH);
+    int by = SCALED(BORDER_HEIGHT);
+    int w  = SCALED(VIEWPORT_W * TILE_HEIGHT);
+    int h  = SCALED(VIEWPORT_H * TILE_HEIGHT);
+    int rx;
+
+    image32_allocPixels(&codexImg, w, h);
+    image32_blitRect(&codexImg, 0, 0, screen, bx, by, w, h, 0);
+
+    for (i = 0; i <= mid; ++i) {
+        w  = SCALED(mid - i);
+        rx = SCALED(mid + i);
+        screenDrawImageInMapArea(BKGD_RUNE_INF);
+        if (w > 0) {
+            image32_blitRect(screen, bx, by, &codexImg, SCALED(i), 0, w, h, 0);
+            image32_blitRect(screen, bx + rx, by,
+                             &codexImg, SCALED(mid), 0, w, h, 0);
+        }
+        screenUploadToGPU();
+        EventHandler::wait_msecs(42);
+    }
+
+    image32_freePixels(&codexImg);
+    }
     return true;
 }
 
-void codexHandleInfinity(const string &answer) {
-    static int tries = 1;
+static void codexHandleEndgame(Codex* codex) {
+    ReadChoiceController pauseController("");
+    int i;
 
-    xu4.eventHandler->popKeyHandler();
+    screenEnableCursor();
+
 #ifdef IOS
-    U4IOS::IOSHideGameControllerHelper hideControllsHelper;
+    // Ugh, we now enter happy callback land, so I know how to do these things manually. Good thing I kept these separate functions.
+    U4IOS::hideGameButtons();
+    U4IOS::beginChoiceConversation();
+    U4IOS::updateChoicesInDialog(" ", "", -1);
+    U4IOS::testFlightPassCheckPoint("Game won!");
 #endif
-    /* slight pause before continuing */
-    screenMessage("\n");
-    screenDisableCursor();
-    EventHandler::wait_msecs(1000);
 
-    if (strcasecmp(answer.c_str(), "infinity") == 0) {
-        EventHandler::wait_msecs(2000);
-        screenShake(10);
-
-        screenEnableCursor();
-        screenMessage("\n%s", codexEndgameText1[0].c_str());
-#ifdef IOS
-        // Ugh, we now enter happy callback land, so I know how to do these things manually. Good thing I kept these separate functions.
-        U4IOS::hideGameButtons();
-        U4IOS::beginChoiceConversation();
-        U4IOS::updateChoicesInDialog(" ", "", -1);
-        U4IOS::testFlightPassCheckPoint("Game won!");
-#endif
-        xu4.eventHandler->pushKeyHandler(&codexHandleEndgameAnyKey);
-    }
-    else if (tries++ < 3) {
-        codexImpureThoughts();
-        screenMessage("\nAbove the din, the voice asks:\n\nIf all eight virtues of the Avatar combine into and are derived from the Three Principles of Truth, Love and Courage...");
-        xu4.eventHandler->pushKeyHandler(&codexHandleInfinityAnyKey);
-    }
-    else codexEject(CODEX_EJECT_BAD_INFINITY);
-}
-
-bool codexHandleEndgameAnyKey(int key, void *data) {
-    static int index = 1;
-
-    xu4.eventHandler->popKeyHandler();
-
-    if (index < 10) {
-
-        if (index < 7) {
-            if (index == 6) {
+    for (i = 0; i < 10; ++i) {
+        if (i == 0) {
+            screenMessage("\n\n%s", codex->endgameText1[0].c_str());
+        } else if (i < 7) {
+            if (i == 6) {
                 screenEraseMapArea();
                 screenRedrawMapArea();
             }
-            screenMessage("%s", codexEndgameText1[index].c_str());
+            screenMessage("%s", codex->endgameText1[i].c_str());
         }
-        else if (index == 7) {
+        else if (i == 7) {
             screenDrawImageInMapArea(BKGD_STONCRCL);
             screenRedrawMapArea();
-            screenMessage("\n\n%s", codexEndgameText2[index-7].c_str());
+            screenMessage("\n\n%s", codex->endgameText2[0].c_str());
         }
-        else if (index > 7)
-            screenMessage("%s", codexEndgameText2[index-7].c_str());
+        else if (i > 7) {
+            screenMessage("%s", codex->endgameText2[i-7].c_str());
+        }
+        screenUploadToGPU();
 
-        index++;
-        xu4.eventHandler->pushKeyHandler(&codexHandleEndgameAnyKey);
+        xu4.eventHandler->pushController(&pauseController);
+        pauseController.waitFor();
     }
-    else {
-        /* CONGRATULATIONS!... you have completed the game in x turns */
-        screenDisableCursor();
-        screenMessage("%s%d%s", codexEndgameText2[index-7].c_str(), c->saveGame->moves, codexEndgameText2[index-6].c_str());
-#ifdef IOS
-        U4IOS::endChoiceConversation();
+
+    /* CONGRATULATIONS!... you have completed the game in x turns */
+    screenDisableCursor();
+    // Note: This text has leading spaces & should be centered.
+    screenMessage("%s%d%s", codex->endgameText2[3].c_str(),
+                  c->saveGame->moves,
+#if 0
+                  codex->endgameText2[4].c_str()
+#else
+                  "\n turns! Report\n thy feat unto\n"
+                  "the XU4 team at\nSourceForge.net!"
 #endif
-        xu4.eventHandler->pushKeyHandler(&KeyHandler::ignoreKeys);
-    }
-
-    return true;
-}
-
-/**
- * Pretty self-explanatory
- */
-void codexImpureThoughts() {
-    screenMessage("\nThy thoughts are not pure.\nI ask again.\n");
-    EventHandler::wait_msecs(2000);
+                            );
+#ifdef IOS
+    U4IOS::endChoiceConversation();
+#endif
+    screenUploadToGPU();
 }

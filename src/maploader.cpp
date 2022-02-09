@@ -2,12 +2,12 @@
  * maploader.cpp
  */
 
+#include <cassert>
 #include <cstring>
 #include "u4.h"
 
 #include "city.h"
 #include "config.h"
-#include "dialogueloader.h"
 #include "debug.h"
 #include "dungeon.h"
 #include "error.h"
@@ -175,7 +175,6 @@ static bool loadCityMap(Map *map, U4FILE *ult) {
     Person* per;
     Person *people[CITY_MAX_PERSONS];
     const UltimaSaveIds* usaveIds = xu4.config->usaveIds();
-    Dialogue* dlg;
     bool ok = false;
 
     /* the map must be 32x32 to be read from an .ULT file */
@@ -217,41 +216,25 @@ static bool loadCityMap(Map *map, U4FILE *ult) {
 
     {
     const uint8_t* conv_idx = data + PD_CONV;
-    U4FILE *tlk = u4fopen(xu4.config->confString(city->tlk_fname));
-    if (! tlk)
-        errorFatal("Unable to open .TLK file");
+    const char* err;
+    int count;
 
-    DialogueLoader *dlgLoader = DialogueLoader::getLoader("application/x-u4tlk");
+    err = discourse_load(&city->disc, xu4.config->confString(city->tlk_fname));
+    if (err)
+        errorFatal(err);
 
-    // NOTE: Ultima 4 .TLK files only have 16 conversations, but this`loop
-    // will support mods with more.
-    for (i = 0; i < CITY_MAX_PERSONS; i++) {
-        dlg = dlgLoader->load(tlk);
-        if (! dlg)
-            break;
-
+    count = city->disc.convCount;
+    for (i = 0; i < count; i++) {
         /*
          * Match up dialogues with their respective people. Multiple people
-         * can share the same dialogue.
+         * can share the same dialogue. Some NPCs, like Isaac the ghost in
+         * Skara Brae, will attach to their dialogue later.
          */
-        bool found = false;
         for (j = 0; j < CITY_MAX_PERSONS; j++) {
-            if (conv_idx[j] == i+1) {
-                people[j]->setDialogue(dlg);
-                found = true;
-            }
+            if (conv_idx[j] == i+1)
+                people[j]->setDiscourseId(i);
         }
-        /*
-         * if the dialogue doesn't match up with a person, attach it to the
-         * city; Isaac the ghost in Skara Brae is handled like this
-         */
-        if (! found)
-            city->extraDialogues.push_back(dlg);
-        else
-            city->dialogueStore.push_back(dlg);
     }
-
-    u4fclose(tlk);
     }
 
     /*
@@ -261,18 +244,8 @@ static bool loadCityMap(Map *map, U4FILE *ult) {
     vector<PersonRole>::iterator ri;
     foreach (ri, city->personroles) {
         per = people[ (*ri).id - 1 ];
-        if (per) {
-            if ((*ri).role == NPC_LORD_BRITISH) {
-                dlg = DialogueLoader::getLoader("application/x-u4lbtlk")->load(NULL);
-set_dialog:
-                per->setDialogue(dlg);
-                city->dialogueStore.push_back(dlg);
-            } else if ((*ri).role == NPC_HAWKWIND) {
-                dlg = DialogueLoader::getLoader("application/x-u4hwtlk")->load(NULL);
-                goto set_dialog;
-            }
+        if (per)
             per->setNpcType(static_cast<PersonNpcType>((*ri).role));
-        }
     }
     }
     ok = true;
@@ -323,6 +296,7 @@ static void initDungeonRoom(Dungeon *dng, int room) {
     cmap->id = 0;
     cmap->border_behavior = Map::BORDER_FIXED;
     cmap->width = cmap->height = 11;
+    cmap->boundMaxX = cmap->boundMaxY = 11;
     cmap->music = MUSIC_COMBAT;
     cmap->type = Map::COMBAT;
     cmap->flags |= NO_LINE_OF_SIGHT;
@@ -347,6 +321,9 @@ static bool loadDungeonMap(Map *map, U4FILE *uf, FILE *sav) {
     /* the map must be 11x11 to be read from an .CON file */
     ASSERT(dungeon->width == DNG_WIDTH, "map width is %d, should be %d", dungeon->width, DNG_WIDTH);
     ASSERT(dungeon->height == DNG_HEIGHT, "map height is %d, should be %d", dungeon->height, DNG_HEIGHT);
+
+    map->boundMaxX = map->width;
+    map->boundMaxY = map->height;
 
     /* load the dungeon map */
     bytes = DNG_HEIGHT * DNG_WIDTH * dungeon->levels;
@@ -418,8 +395,11 @@ static bool loadDungeonMap(Map *map, U4FILE *uf, FILE *sav) {
         u4fread(dungeon->rooms[i].buffer, sizeof(dungeon->rooms[i].buffer), 1, uf);
 
         /* translate each creature tile to a tile id */
-        for (j = 0; j < sizeof(dungeon->rooms[i].creature_tiles); j++)
-            dungeon->rooms[i].creature_tiles[j] = usaveIds->moduleId(dungeon->rooms[i].creature_tiles[j]).id;
+        uint8_t* ct = dungeon->rooms[i].creature_tiles;
+        for (j = 0; j < sizeof(dungeon->rooms[i].creature_tiles); j++) {
+            *ct = usaveIds->moduleId( *ct ).id;
+            ++ct;
+        }
 
         /* translate each map tile to a tile id */
         for (j = 0; j < sizeof(room_tiles); j++)

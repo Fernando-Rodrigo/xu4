@@ -47,7 +47,10 @@ PartyMember::PartyMember(Party *p, SaveGamePlayerRecord *pr) :
 }
 
 PartyMember::~PartyMember() {
-    removeFromMaps();
+    // Need to check context as IntroController creates PartyMember objects.
+    if (c) {
+        removeFromMaps();
+    }
 }
 
 /**
@@ -247,14 +250,23 @@ bool PartyMember::heal(HealType type) {
     case HT_CURE:
         if (getStatus() != STAT_POISONED)
             return false;
+cure:
         removeStatus(STAT_POISONED);
-        break;
+        return true;
 
     case HT_FULLHEAL:
         if (isDead() || player->hp == player->hpMax)
             return false;
         player->hp = player->hpMax;
         break;
+
+    case HT_RESTORE:
+        if (isDead())
+            return false;
+        if (getStatus() != STAT_POISONED && player->hp == player->hpMax)
+            return false;
+        player->hp = player->hpMax;
+        goto cure;
 
     case HT_RESURRECT:
         if (! isDead())
@@ -289,7 +301,6 @@ bool PartyMember::heal(HealType type) {
         player->hp = player->hpMax;
 
     notifyOfChange();
-
     return true;
 }
 

@@ -2,6 +2,7 @@
  * dungeonview.cpp
  */
 
+#include <assert.h>
 #include "context.h"
 #include "debug.h"
 #include "dungeon.h"
@@ -13,12 +14,15 @@
 #include "tileanim.h"
 #include "tileset.h"
 #include "u4.h"
+#include "utils.h"
 #include "xu4.h"
 
 
 DungeonView::DungeonView(int x, int y, int columns, int rows) : TileView(x, y, rows, columns)
 , screen3dDungeonViewEnabled(true)
 {
+    spotTrapRange = -1;
+
     black  = tileset->getByName(Tile::sym.black)->getId();
     avatar = tileset->getByName(Tile::sym.avatar)->getId();
 
@@ -30,11 +34,55 @@ DungeonView::DungeonView(int x, int y, int columns, int rows) : TileView(x, y, r
     cacheGraphicData();
 }
 
+/*
+ * Sets coords relative to party and fills tiles from that location.
+ */
+static void dungeonGetTiles(Coords& coords, std::vector<MapTile>& tiles,
+                            int fwd, int side) {
+    coords = c->location->coords;
+
+    switch (c->saveGame->orientation) {
+    case DIR_WEST:
+        coords.x -= fwd;
+        coords.y -= side;
+        break;
+
+    case DIR_NORTH:
+        coords.x += side;
+        coords.y -= fwd;
+        break;
+
+    case DIR_EAST:
+        coords.x += fwd;
+        coords.y += side;
+        break;
+
+    case DIR_SOUTH:
+        coords.x -= side;
+        coords.y += fwd;
+        break;
+
+    case DIR_ADVANCE:
+    case DIR_RETREAT:
+    default:
+        ASSERT(0, "Invalid dungeon orientation");
+    }
+
+    // Wrap the coordinates if necessary
+    map_wrap(coords, c->location->map);
+
+    bool focus;
+    tiles.clear();
+    c->location->getTilesAt(tiles, coords, focus);
+}
+
 void DungeonView::display(Context * c, TileView *view)
 {
     static const int8_t wallSides[3] = { -1, 1, 0 };
+    Dungeon* dungeon = dynamic_cast<Dungeon *>(c->location->map);
     vector<MapTile> tiles;
-    int x,y;
+    Coords drawLoc;
+    int x, y;
 
     /* 1st-person perspective */
     if (screen3dDungeonViewEnabled) {
@@ -43,33 +91,38 @@ void DungeonView::display(Context * c, TileView *view)
 
         screenEraseMapArea();
         if (c->party->getTorchDuration() > 0) {
+            vector<MapTile> distant_tiles;
+
             for (y = 3; y >= 0; y--) {
                 DungeonGraphicType type;
                 Direction dir = (Direction) c->saveGame->orientation;
 
                 // Draw walls player can see.
+                Image::enableBlend(1);
                 for (x = 0; x < 3; ++x) {
-                    tiles = getTiles(y, wallSides[x]);
-                    type = tilesToGraphic(tiles);
-                    drawWall(wallSides[x], y, dir, type);
+                    dungeonGetTiles(drawLoc, tiles, y, wallSides[x]);
+                    type = tilesToGraphic(dungeon, tiles);
+                    drawWall(graphicIndex(drawLoc, wallSides[x], y, dir, type));
                 }
+                Image::enableBlend(0);
 
                 //This only checks that the tile at y==3 is opaque
                 if (y == 3 && !tiles.front().getTileType()->isOpaque())
                 {
                     for (int y_obj = farthest_non_wall_tile_visibility; y_obj > y; y_obj--)
                     {
-                    vector<MapTile> distant_tiles = getTiles(y_obj, 0);
-                    DungeonGraphicType distant_type = tilesToGraphic(distant_tiles);
+                    dungeonGetTiles(drawLoc, distant_tiles, y_obj, 0);
+                    DungeonGraphicType distant_type =
+                        tilesToGraphic(dungeon, distant_tiles);
 
                     if ((distant_type == DNGGRAPHIC_DNGTILE) ||
                         (distant_type == DNGGRAPHIC_BASETILE))
-                        drawInDungeon(tileset->get(distant_tiles.front().getId()), 0, y_obj, dir);
+                        drawInDungeon(distant_tiles.front(), 0, y_obj, dir);
                     }
                 }
                 if ((type == DNGGRAPHIC_DNGTILE) ||
                     (type == DNGGRAPHIC_BASETILE))
-                    drawInDungeon(tileset->get(tiles.front().getId()), 0, y, dir);
+                    drawInDungeon(tiles.front(), 0, y, dir);
             }
         }
     }
@@ -78,7 +131,8 @@ void DungeonView::display(Context * c, TileView *view)
     else {
         for (y = 0; y < VIEWPORT_H; y++) {
             for (x = 0; x < VIEWPORT_W; x++) {
-                tiles = getTiles((VIEWPORT_H / 2) - y, x - (VIEWPORT_W / 2));
+                dungeonGetTiles(drawLoc, tiles,
+                                (VIEWPORT_H / 2) - y, x - (VIEWPORT_W / 2));
 
                 /* Only show blackness if there is no light */
                 if (c->party->getTorchDuration() <= 0)
@@ -92,7 +146,7 @@ void DungeonView::display(Context * c, TileView *view)
     }
 }
 
-void DungeonView::drawInDungeon(const Tile *tile, int x_offset, int distance, Direction orientation) {
+void DungeonView::drawInDungeon(const MapTile& mt, int x_offset, int distance, Direction orientation) {
     const static int nscale_vga[] = { 12, 8, 4, 2, 1};
     const static int nscale_ega[] = { 8, 4, 2, 1, 0};
 
@@ -118,26 +172,12 @@ void DungeonView::drawInDungeon(const Tile *tile, int x_offset, int distance, Di
         offset_multiplier = 4;
     }
 
-#if 0
-    //Clear scratchpad and set a background color
-    RGBA darkGray(14, 15, 16, 0);
-    animated->fill(darkGray);
-#endif
-
     //Put tile on animated scratchpad
-    if (tile->getAnim()) {
-        MapTile mt = tile->getId();
+    const Tile* tile = tileset->get(mt.id);
+    if (tile->getAnim())
         tile->getAnim()->draw(animated, tile, mt, orientation);
-    }
     else
-    {
         tile->getImage()->drawOn(animated, 0, 0);
-    }
-
-#if 0
-    animated->makeColorTransparent(darkGray);
-    //This process involving the background color is only required for drawing in the dungeon.
-#endif
 
     /* scale is based on distance; 1 means half size, 2 regular, 4 means scale by 2x, etc. */
     bool tiledWall = tile->isTiledInDungeon();
@@ -178,10 +218,22 @@ void DungeonView::drawInDungeon(const Tile *tile, int x_offset, int distance, Di
     delete scaled;
 }
 
-int DungeonView::graphicIndex(int xoffset, int distance, Direction orientation, DungeonGraphicType type) {
-    int index;
+/*
+ * Begin trap detection for the current view.
+ * One trap in range may be shown after a delay.
+ */
+void DungeonView::detectTraps() {
+    spotTrapRange = xu4_random(4);
+    if (spotTrapRange < 3)
+        spotTrapTime = c->commandTimer + 200 + xu4_random(3000);
+    else
+        spotTrapRange = -1;
+}
 
-    index = 0;
+int DungeonView::graphicIndex(const Coords& loc, int xoffset, int distance,
+                              Direction orientation, DungeonGraphicType type) {
+    int index;
+    assert(distance < 4);
 
     if (type == DNGGRAPHIC_LADDERUP && xoffset == 0)
         return 48 +
@@ -198,15 +250,32 @@ int DungeonView::graphicIndex(int xoffset, int distance, Direction orientation, 
         (distance * 2) +
         (DIR_IN_MASK(orientation, MASK_DIR_SOUTH | MASK_DIR_NORTH) ? 1 : 0);
 
+    if (type == DNGGRAPHIC_TRAP) {
+#if 1
+        if (xoffset == 0 && spotTrapRange == distance &&
+             c->commandTimer >= spotTrapTime)
+#else
+        if (xoffset == 0)   // For Testing
+#endif
+        {
+            index = static_cast<Dungeon *>(c->location->map)->subTokenAt(loc);
+            if (index == TRAP_FALLING_ROCK)
+                return 78 + distance;
+            if (index == TRAP_PIT)
+                return 81 + distance;
+        }
+        return -1;
+    }
+
     /* FIXME */
     if (type != DNGGRAPHIC_WALL && type != DNGGRAPHIC_DOOR)
         return -1;
 
+    index = 0;
     if (type == DNGGRAPHIC_DOOR)
         index += 24;
 
     index += (xoffset + 1) * 2;
-
     index += distance * 6;
 
     if (DIR_IN_MASK(orientation, MASK_DIR_SOUTH | MASK_DIR_NORTH))
@@ -215,44 +284,8 @@ int DungeonView::graphicIndex(int xoffset, int distance, Direction orientation, 
     return index;
 }
 
-std::vector<MapTile> DungeonView::getTiles(int fwd, int side) {
-    Coords coords = c->location->coords;
-
-    switch (c->saveGame->orientation) {
-    case DIR_WEST:
-        coords.x -= fwd;
-        coords.y -= side;
-        break;
-
-    case DIR_NORTH:
-        coords.x += side;
-        coords.y -= fwd;
-        break;
-
-    case DIR_EAST:
-        coords.x += fwd;
-        coords.y += side;
-        break;
-
-    case DIR_SOUTH:
-        coords.x -= side;
-        coords.y += fwd;
-        break;
-
-    case DIR_ADVANCE:
-    case DIR_RETREAT:
-    default:
-        ASSERT(0, "Invalid dungeon orientation");
-    }
-
-    // Wrap the coordinates if necessary
-    map_wrap(coords, c->location->map);
-
-    bool focus;
-    return c->location->tilesAt(coords, focus);
-}
-
-DungeonGraphicType DungeonView::tilesToGraphic(const std::vector<MapTile> &tiles) {
+DungeonGraphicType DungeonView::tilesToGraphic(const Dungeon* dungeon,
+                                        const std::vector<MapTile> &tiles) {
     MapTile tile = tiles.front();
 
     /*
@@ -276,11 +309,10 @@ DungeonGraphicType DungeonView::tilesToGraphic(const std::vector<MapTile> &tiles
      * if not an annotation or object, then the tile is a dungeon
      * token
      */
-    Dungeon *dungeon = dynamic_cast<Dungeon *>(c->location->map);
     DungeonToken token = dungeon->tokenForTile(tile.id);
-
     switch (token) {
     case DUNGEON_TRAP:
+        return DNGGRAPHIC_TRAP;
     case DUNGEON_CORRIDOR:
         return DNGGRAPHIC_NONE;
     case DUNGEON_WALL:
@@ -301,7 +333,7 @@ DungeonGraphicType DungeonView::tilesToGraphic(const std::vector<MapTile> &tiles
     }
 }
 
-#define GRAPHIC_COUNT   78
+#define GRAPHIC_COUNT   84
 
 const struct {
     const char* imageName;
@@ -397,7 +429,14 @@ const struct {
     { "dung2_xxx_ew", 0,0,0,0,0 },
     { "dung2_xxx_ns", 0,0,0,0,0 },
     { "dung3_xxx_ew", 0,0,0,0,0 },
-    { "dung3_xxx_ns", 0,0,0,0,0 }
+    { "dung3_xxx_ns", 0,0,0,0,0 },
+        // 78
+    { "dung0_hole",   0,0,0,0,0 },
+    { "dung1_hole",   0,0,0,0,0 },
+    { "dung2_hole",   0,0,0,0,0 },
+    { "dung0_pit",    0,0,0,0,0 },
+    { "dung1_pit",    0,0,0,0,0 },
+    { "dung2_pit",    0,0,0,0,0 }
 };
 
 /*
@@ -430,14 +469,13 @@ static void drawGraphic(const ImageInfo* info, const SubImage* subimage,
         info->image->draw(x, y);
 }
 
-void DungeonView::drawWall(int xoffset, int distance, Direction orientation, DungeonGraphicType type) {
+void DungeonView::drawWall(int index) {
     const SubImage* subimage;
-    int index, i2;
     int x, y;
+    int i2;
     unsigned int scale = SCALED_BASE;
 
-    index = graphicIndex(xoffset, distance, orientation, type);
-    if (index == -1 || distance >= 4)
+    if (index < 0)
         return;
     if (! graphic[index].info)
         return;

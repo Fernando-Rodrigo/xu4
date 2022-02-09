@@ -10,7 +10,6 @@
 #include "camp.h"
 #include "config.h"
 #include "context.h"
-#include "conversation.h"
 #include "debug.h"
 #include "error.h"
 #include "event.h"
@@ -1213,7 +1212,7 @@ Script::ReturnCode Script::input(xmlNodePtr script, xmlNodePtr current) {
     // Does the variable have a maximum length?
     if (xmlPropExists(current, "maxlen"))
         this->inputMaxLen = getPropAsInt(current, "maxlen");
-    else this->inputMaxLen = Conversation::BUFFERLEN;
+    else this->inputMaxLen = TEXT_AREA_W;
 
     // Should we name the variable something other than "input"
     if (xmlPropExists(current, "name"))
@@ -1728,11 +1727,11 @@ void Script::funcParse(const string & str, string *funcName, string *contents) {
     else funcName->erase();
 }
 
-void Script::talkToVendor(const string& goods) {
+void Script::talkToVendor(const char* locale, const string& goods) {
     // unload the previous script if it wasn't already unloaded
     if (getState() != Script::STATE_UNLOADED)
         unload();
-    load("vendorScript.xml", goods, "vendor", c->location->map->getName());
+    load("vendorScript.xml", goods, "vendor", locale);
     run("intro");
 #ifdef IOS
     U4IOS::IOSConversationChoiceHelper choiceDialog;
@@ -1767,7 +1766,7 @@ void Script::talkToVendor(const string& goods) {
                 U4IOS::IOSConversationHelper ipadNumberInput;
                 ipadNumberInput.beginConversation(U4IOS::UIKeyboardTypeNumberPad, "Amount?");
 #endif
-                int val = ReadIntController::get(getInputMaxLen(), TEXT_AREA_X + c->col, TEXT_AREA_Y + c->line);
+                int val = ReadIntController::get(getInputMaxLen());
                 setVar(getInputName(), val);
             } break;
 
