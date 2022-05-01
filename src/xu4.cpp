@@ -38,6 +38,21 @@ extern int gameSave(const char*);
 bool verbose = false;
 
 
+#ifdef USE_BORON
+#include <boron/boron.h>
+
+// Using the Boron internal RNG functions for xu4.randomFx.
+extern "C" {
+void     well512_init(void* ws, uint32_t seed);
+uint32_t well512_genU32(void* ws);
+}
+#else
+#include "well512.h"
+#endif
+
+static void xu4_srandom(uint32_t);
+
+
 enum OptionsFlag {
     OPT_FULLSCREEN = 1,
     OPT_NO_INTRO   = 2,
@@ -120,11 +135,7 @@ int parseOptions(Options* opt, int argc, char** argv) {
             printf(
             "Options:\n"
             "      --filter <string>   Specify display filtering mode.\n"
-#ifdef USE_GL
             "                          (point, HQX, xBR-lv2)\n"
-#else
-            "                          (point, 2xBi, 2xSaI, Scale2x)\n"
-#endif
             "  -f, --fullscreen        Run in fullscreen mode.\n"
             "  -h, --help              Print this message and quit.\n"
             "  -i, --skip-intro        Skip the intro. and load the last saved game.\n"
@@ -224,16 +235,19 @@ void servicesInit(XU4GameServices* gs, Options* opt) {
     gs->eventHandler = new EventHandler(1000/gs->settings->gameCyclesPerSecond,
                             1000/gs->settings->screenAnimationFramesPerSecond);
 
+    {
+    uint32_t seed;
+
 #ifdef DEBUG
     if (opt->flags & OPT_REPLAY) {
-        uint32_t seed = gs->eventHandler->replay(opt->recordFile);
+        seed = gs->eventHandler->replay(opt->recordFile);
         if (! seed) {
             servicesFree(gs);
             errorFatal("Cannot open recorded input from %s", opt->recordFile);
         }
         xu4_srandom(seed);
     } else if (opt->flags & OPT_RECORD) {
-        uint32_t seed = time(NULL);
+        seed = time(NULL);
         if (! gs->eventHandler->beginRecording(opt->recordFile, seed)) {
             servicesFree(gs);
             errorFatal("Cannot open recording file %s", opt->recordFile);
@@ -241,7 +255,11 @@ void servicesInit(XU4GameServices* gs, Options* opt) {
         xu4_srandom(seed);
     } else
 #endif
-        xu4_srandom(time(NULL));
+        seed = time(NULL);
+
+    xu4_srandom(seed);
+    well512_init(gs->randomFx, seed);
+    }
 
     gs->stage = (opt->flags & OPT_NO_INTRO) ? StagePlay : StageIntro;
 }
@@ -330,4 +348,72 @@ int main(int argc, char *argv[]) {
 
     servicesFree(&xu4);
     return 0;
+}
+
+
+//----------------------------------------------------------------------------
+
+
+/*
+ * Seed the random number generator.
+ */
+static void xu4_srandom(uint32_t seed) {
+#ifdef USE_BORON
+    // Compiled code and module scripts share this generator.
+    boron_randomSeed(xu4.config->boronThread(), seed);
+#elif (defined(BSD) && (BSD >= 199103)) || (defined (MACOSX) || defined (IOS))
+    srandom(seed);
+#else
+    srand(seed);
+#endif
+}
+
+#ifdef REPORT_RNG
+char rpos = '-';
+#endif
+
+extern "C" {
+
+/*
+ * Generate a random number between 0 and (upperRange - 1).
+ */
+int xu4_random(int upperRange) {
+#ifdef USE_BORON
+    if (upperRange < 2)
+        return 0;
+#ifdef REPORT_RNG
+    uint32_t r = boron_random(xu4.config->boronThread());
+    uint32_t n = r % upperRange;
+    printf( "KR rn %d %d %c\n", r, n, rpos);
+    return n;
+#else
+    return boron_random(xu4.config->boronThread()) % upperRange;
+#endif
+#else
+#if (defined(BSD) && (BSD >= 199103)) || (defined (MACOSX) || defined (IOS))
+    int r = random();
+#else
+    int r = rand();
+#endif
+    return (int) ((((double)upperRange) * r) / (RAND_MAX+1.0));
+#endif
+}
+
+/*
+ * Generate a random number between 0 and (upperRange - 1).
+ *
+ * This function is used by audio & visual effects that do not alter the
+ * game simulation state in any way.  Having a separate generator allows for
+ * a reproducibile game state (i.e. recording playback to work) even if sound
+ * or graphics elements change between runs.
+ */
+int xu4_randomFx(int n) {
+    return (n < 2) ? 0 : well512_genU32(xu4.randomFx) % n;
+}
+
+// Using randomFx for tile frame animation.
+#define CONFIG_ANIM_RANDOM
+#define anim_random xu4_randomFx
+#include "anim.c"
+
 }

@@ -29,6 +29,8 @@ enum Sound {
     SOUND_MOONGATE,         // moongate used
 
     SOUND_CANNON,
+    SOUND_PARTY_STRUCK,     // Party or PC ship damaged by monster projectile
+                            // or cannon. Similar to SOUND_NPC_STRUCK in u4dos.
     SOUND_RUMBLE,
     SOUND_PREMAGIC_MANA_JUMBLE,
     SOUND_MAGIC,
@@ -64,6 +66,7 @@ void soundDelete(void);
 
 void soundPlay(Sound sound, bool onlyOnce = true, int specificDurationInTicks = -1);
 
+int  soundDuration(Sound sound);
 void soundStop();
 void soundSetVolume(int);
 int  soundVolumeDec();

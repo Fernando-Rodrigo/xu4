@@ -18,6 +18,7 @@
 #include "imageloader.h"
 #include "imagemgr.h"
 #include "map.h"
+#include "module.h"
 #include "portal.h"
 #include "screen.h"
 #include "settings.h"
@@ -34,10 +35,6 @@
 // Order matches config context in pack-xu4.b.
 enum ConfigValues
 {
-    CI_AUTHOR,
-    CI_ABOUT,
-    CI_VERSION,
-    CI_RULES,
     CI_ARMORS,
     CI_WEAPONS,
     CI_CREATURES,
@@ -94,7 +91,6 @@ static void npcTalk_init(NpcTalkCache* tc, UThread* ut) {
 
 struct ConfigData
 {
-    char* modulePath;
     vector<const char*> sarray;   // Temp. buffer for const char** values.
     vector<Layout> layouts;
     vector<string> schemeNames;
@@ -116,16 +112,14 @@ struct ConfigData
 };
 
 struct ConfigBoron : public Config {
-    ConfigBoron(const char* modulePath);
+    ConfigBoron(const char* renderPath, const char* modulePath);
     ~ConfigBoron();
     const UBuffer* buffer(int value, int dataType) const;
     const UBuffer* blockIt(UBlockIt* bi, int value) const;
     //const UBuffer* blockBuffer(int value, uint32_t n, int dataType) const;
 
     UThread* ut;
-    CDIEntry* toc;
-    uint8_t* fnamBuf;
-    CDIStringTable fnam;
+    Module mod;
     UIndex configN;
     UIndex itemIdN;         // item-id context!
     size_t tocUsed;
@@ -307,7 +301,6 @@ static Tile* conf_tile(ConfigBoron* cfg, Tile* tile, int id, UBlockIt& bi)
         return NULL;
 
     tile->id = id;
-    tile->scale = 1;
     tile->name = ur_atom(bi.it);
 
     const UCell* cell = bi.it+1;
@@ -857,25 +850,57 @@ const void* Config::scriptEvalArg(const char* fmt, ...)
 
 //--------------------------------------
 
-ConfigBoron::ConfigBoron(const char* modulePath)
+// Load and merge config.
+static const char* confLoader(FILE* fp, const CDIEntry* ent, void* user)
+{
+    UCell* res;
+    ConfigBoron* cfg = (ConfigBoron*) user;
+    UThread* ut = cfg->ut;
+    uint8_t* confBuf = cdi_loadPakChunk(fp, ent);
+    if (! confBuf)
+        return "Read CONF failed";
+
+    res = ur_stackTop(ut);
+    if (ur_unserialize(ut, confBuf, confBuf + ent->bytes, res) == UR_OK) {
+        res = ur_buffer(res->series.buf)->ptr.cell;
+        if (ur_is(res, UT_CONTEXT)) {
+            if (cfg->configN == UR_INVALID_BUF) {
+                cfg->configN = res->series.buf;
+                ur_hold(cfg->configN);  // Keep forever.
+            } else {
+                UBuffer* cur = ur_buffer(cfg->configN);
+                UBuffer* ctx = ur_buffer(res->series.buf);
+                int i;
+
+                // Replace existing config context values (except for music).
+                for (i = 0; i < CI_COUNT; ++i) {
+                    if (i == CI_MUSIC)
+                        continue;
+                    res = ur_ctxCell(ctx, i);
+                    if (! ur_is(res, UT_NONE)) {
+                        cur->ptr.cell[i] = *res;
+                        //printf("KR config overlay %d\n", i);
+                    }
+                }
+            }
+        } else
+            return "Serialized CONF context not found";
+    } else
+        return "Unserialize CONF failed";
+
+    free(confBuf);
+    return NULL;
+}
+
+ConfigBoron::ConfigBoron(const char* renderPath, const char* modulePath)
 {
     UBlockIt bi;
     const char* error = NULL;
-    const CDIEntry* ent;
-    FILE* fp;
-
-#define NO_PTR(ptr, msg) \
-    if (! ptr) { \
-        error = msg; \
-        goto fail; \
-    }
 
 
     backend = &xcd;
-
     xcd.creatureTileIndex = NULL;
     xcd.tileset = NULL;
-    xcd.modulePath = strdup(modulePath);
     memset(&xcd.usaveIds, 0, sizeof(xcd.usaveIds));
     ur_binInit(&evalBuf, 1024);
 
@@ -889,62 +914,18 @@ ConfigBoron::ConfigBoron(const char* modulePath)
     ur_internAtoms(ut, "hit_flash miss_flash random shrine abyss"
                        " imageset tileanims _cel rect", &sym_hitFlash);
 
+    mod_init(&mod, 3);
+    configN = UR_INVALID_BUF;
 
-    // Read package table of contents.
-    {
-    CDIEntry pakHead;
-
-    fp = cdi_openPak(modulePath, &pakHead);
-    if (! fp)
-        errorFatal("Cannot open module %s", modulePath);
-
-    if (pakHead.appId != CDI32('x','u','4', 1)) {
-        error = "Invalid module id";
-        goto fail;
+    if (renderPath) {
+        error = mod_addLayer(&mod, renderPath, NULL, NULL, NULL);
+        if (error)
+            errorFatal("%s (%s)", error, renderPath);
     }
 
-    toc = cdi_loadPakTOC(fp, &pakHead);
-    NO_PTR(toc, "No module TOC");
-    tocUsed = CDI_TOC_SIZE((&pakHead));
-    }
-
-
-    // Load filename string table.
-    ent = cdi_findAppId(toc, tocUsed, CDI32('F','N','A','M'));
-    NO_PTR(ent, "Module FNAM not found");
-    fnamBuf = cdi_loadPakChunk(fp, ent);
-    NO_PTR(fnamBuf, "Read FNAM failed");
-    cdi_initStringTable(&fnam, fnamBuf);
-
-
-    // Load config.
-    {
-    UCell* res;
-    uint8_t* confBuf;
-
-    ent = cdi_findAppId(toc, tocUsed, CDI32('C','O','N','F'));
-    NO_PTR(ent, "Module CONF not found");
-    confBuf = cdi_loadPakChunk(fp, ent);
-    NO_PTR(confBuf, "Read CONF failed");
-
-    res = ur_stackTop(ut);
-    if (ur_unserialize(ut, confBuf, confBuf + ent->bytes, res) == UR_OK) {
-        res = ur_buffer(res->series.buf)->ptr.cell;
-        if (ur_is(res, UT_CONTEXT)) {
-            configN = res->series.buf;
-            ur_hold(configN);   // Keep forever.
-        } else
-            error = "Serialized context not found";
-    } else
-        error = "Unserialize CONF failed";
-
-    free(confBuf);
-    }
-
-fail:
-    fclose(fp);
+    error = mod_addLayer(&mod, modulePath, NULL, confLoader, this);
     if (error)
-        errorFatal(error);
+        errorFatal("%s (%s)", error, modulePath);
 
     npcTalk_init(&xcd.talk, ut);
 
@@ -1093,30 +1074,29 @@ ConfigBoron::~ConfigBoron()
     xcd.usaveIds.free();
     ur_binFree(&evalBuf);
 
+    mod_free(&mod);
     boron_freeEnv( ut );
-    free(fnamBuf);
-    free(toc);
-    free(xcd.modulePath);
 }
 
 //--------------------------------------
 // Config Service API
 
+extern "C" int u4find_pathc(const char*, const char*, char*, size_t);
+
 // Create Config service.
 Config* configInit(const char* module) {
-    string path;
-    int len = strlen(module) - 4;
+    const char* ext;
+    char rpath[512];
+    char mpath[512];
 
-    if (len > 0 && strcmp(module + len, ".mod") == 0) {
-        path = u4find_path(module);
-    } else {
-        string mfile(module);
-        mfile += ".mod";
-        path = u4find_path(mfile.c_str());
-    }
-    if (path.empty())
+    int renderFound = u4find_pathc("render.pak", "", rpath, sizeof(rpath));
+
+    int len = strlen(module) - 4;
+    ext = (len > 0 && strcmp(module + len, ".mod") == 0) ? "" : ".mod";
+    if (! u4find_pathc(module, ext, mpath, sizeof(mpath)))
         errorFatal("Cannot find module %s", module);
-    return new ConfigBoron(path.c_str());
+
+    return new ConfigBoron(renderFound ? rpath : NULL, mpath);
 }
 
 void configFree(Config* conf) {
@@ -1203,11 +1183,11 @@ int32_t Config::npcTalk(uint32_t appId) {
         }
     }
 
-    const CDIEntry* ent = cdi_findAppId(CX->toc, CX->tocUsed, appId);
+    const CDIEntry* ent = mod_findAppId(&CX->mod, appId);
     if (ent) {
         uint8_t* buf;
         UStatus ok;
-        FILE* fp = fopen(CB->modulePath, "rb");
+        FILE* fp = fopen(mod_path(&CX->mod, ent), "rb");
         if (fp) {
             buf = cdi_loadPakChunk(fp, ent);
             fclose(fp);
@@ -1223,44 +1203,15 @@ int32_t Config::npcTalk(uint32_t appId) {
     return UR_INVALID_BUF;
 }
 
-const char* Config::modulePath() const {
-    return CB->modulePath;
-}
-
-static int lastChar(const char* str) {
-    while (*str)
-        ++str;
-    return str[-1];
+const char* Config::modulePath(const CDIEntry* ent) const {
+    return mod_path(&CX->mod, ent);
 }
 
 /*
  * Return the CDIEntry pointer for a given source filename.
  */
-const CDIEntry* Config::fileEntry( const char* sourceFilename ) const {
-    const CDIStringTable& st = CX->fnam;
-    if (st.form != 1)
-        return NULL;
-
-    const uint16_t* it  = st.index.f1;
-    const uint16_t* end = it + st.count;
-    int n = 0;
-    while (it != end) {
-        if (strcmp(st.strings + *it, sourceFilename) == 0) {
-            int a, b;
-            if (lastChar(sourceFilename) == 'l') {
-                a = 'S';    // .glsl
-                b = 'L';
-            } else {
-                a = 'I';    // .png
-                b = 'M';
-            }
-            uint32_t appId = CDI32(a, b, (n >> 8), (n & 0xff));
-            return cdi_findAppId(CX->toc, CX->tocUsed, appId);
-        }
-        ++n;
-        ++it;
-    }
-    return NULL;
+const CDIEntry* Config::fileEntry(const char* sourceFilename) const {
+    return mod_fileEntry(&CX->mod, sourceFilename);
 }
 
 /*
@@ -1268,7 +1219,7 @@ const CDIEntry* Config::fileEntry( const char* sourceFilename ) const {
  */
 const CDIEntry* Config::imageFile( const char* id ) const {
     uint32_t appId = CDI32(id[0], id[1], id[2], id[3]);
-    return cdi_findAppId(CX->toc, CX->tocUsed, appId);
+    return mod_findAppId(&CX->mod, appId);
 }
 
 /*
@@ -1276,7 +1227,7 @@ const CDIEntry* Config::imageFile( const char* id ) const {
  */
 const CDIEntry* Config::mapFile( uint32_t id ) const {
     uint32_t appId = CDI32('M', 'A', (id >> 8), (id & 255));
-    return cdi_findAppId(CX->toc, CX->tocUsed, appId);
+    return mod_findAppId(&CX->mod, appId);
 }
 
 /*
@@ -1285,7 +1236,7 @@ const CDIEntry* Config::mapFile( uint32_t id ) const {
 const CDIEntry* Config::musicFile( uint32_t id ) const {
     --id;       // Music file numbering starts at 0.
     uint32_t appId = CDI32('M', 'U', (id >> 8), (id & 255));
-    return cdi_findAppId(CX->toc, CX->tocUsed, appId);
+    return mod_findAppId(&CX->mod, appId);
 }
 
 /*
@@ -1293,7 +1244,7 @@ const CDIEntry* Config::musicFile( uint32_t id ) const {
  */
 const CDIEntry* Config::soundFile( uint32_t id ) const {
     uint32_t appId = CDI32('S', 'O', (id >> 8), (id & 255));
-    return cdi_findAppId(CX->toc, CX->tocUsed, appId);
+    return mod_findAppId(&CX->mod, appId);
 }
 
 /*
@@ -1519,7 +1470,6 @@ static ImageInfo* loadImageInfo(const ConfigBoron* cfg, UBlockIt& bi) {
     info->width    = numA[0];
     info->height   = numA[1];
     info->subImageCount = 0;
-    info->prescale = 0;
     info->image    = NULL;
     info->subImages = NULL;
 
@@ -1572,9 +1522,7 @@ static ImageInfo* loadImageInfo(const ConfigBoron* cfg, UBlockIt& bi) {
             subimage->height = numA[3];
             celCount         = (sit.it->coord.len > 4) ? numA[4] : 1;
 
-#ifdef USE_GL
             subimage->celCount = celCount;
-#endif
 #ifndef GPU_RENDER
             // Animated tiles denoted by height. TODO: Eliminate this.
             if (celCount > 1)

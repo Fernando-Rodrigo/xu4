@@ -18,22 +18,21 @@ void TileAnimTransform::draw(Image* dest, const Tile* tile,
     switch(animType) {
     case ATYPE_INVERT:
     {
-        int scale = tile->getScale();
-        int x = var.invert.x * scale;
-        int y = var.invert.y * scale;
+        int x = var.invert.x;
+        int y = var.invert.y;
 
         tile->getImage()->drawSubRectInvertedOn(dest, x, y,
                 x, (tile->getHeight() * mapTile.frame) + y,
-                var.invert.w * scale, var.invert.h * scale);
+                var.invert.w, var.invert.h);
     }
         break;
 
     case ATYPE_SCROLL:
     {
         if (var.scroll.increment == 0)
-            var.scroll.increment = tile->getScale();
+            var.scroll.increment = 1;
 
-        int offset = screenState()->currentCycle * 4 / SCR_CYCLE_PER_SECOND * tile->getScale();
+        int offset = screenState()->currentCycle * 4 / SCR_CYCLE_PER_SECOND;
         if (var.scroll.lastOffset != offset) {
             var.scroll.lastOffset = offset;
             var.scroll.current += var.scroll.increment;
@@ -75,9 +74,8 @@ void TileAnimTransform::draw(Image* dest, const Tile* tile,
 #if 0
     case ATYPE_PIXEL:
     {
-        RGBA color = var.pixel.colors[ xu4_random(colors.size()) ];
-        int scale = tile->getScale();
-        dest->fillRect(x * scale, y * scale, scale, scale,
+        RGBA color = var.pixel.colors[ xu4_randomFx(colors.size()) ];
+        dest->fillRect(x, y, 1, 1,
                        color.r, color.g, color.b, color.a);
     }
         break;
@@ -85,11 +83,10 @@ void TileAnimTransform::draw(Image* dest, const Tile* tile,
     case ATYPE_PIXEL_COLOR:
     {
         const Image *tileImage = tile->getImage();
-        int scale = tile->getScale();
-        int x = var.pcolor.x * scale;
-        int y = var.pcolor.y * scale;
-        int w = var.pcolor.w * scale;
-        int h = var.pcolor.h * scale;
+        int x = var.pcolor.x;
+        int y = var.pcolor.y;
+        int w = var.pcolor.w;
+        int h = var.pcolor.h;
         RGBA start = var.pcolor.start;
         RGBA end   = var.pcolor.end;
         RGBA diff  = end;
@@ -110,9 +107,9 @@ void TileAnimTransform::draw(Image* dest, const Tile* tile,
                 if (pixelAt.r >= start.r && pixelAt.r <= end.r &&
                     pixelAt.g >= start.g && pixelAt.g <= end.g &&
                     pixelAt.b >= start.b && pixelAt.b <= end.b) {
-                    dest->putPixel(i, j, start.r + xu4_random(diff.r),
-                                         start.g + xu4_random(diff.g),
-                                         start.b + xu4_random(diff.b),
+                    dest->putPixel(i, j, start.r + xu4_randomFx(diff.r),
+                                         start.g + xu4_randomFx(diff.g),
+                                         start.b + xu4_randomFx(diff.b),
                                          pixelAt.a);
                 }
             }

@@ -10,6 +10,7 @@
 #include "error.h"
 #include "imagemgr.h"
 #include "settings.h"
+#include "scale.h"
 #include "screen.h"
 #include "tileanim.h"
 #include "tileset.h"
@@ -182,19 +183,18 @@ void DungeonView::drawInDungeon(const MapTile& mt, int x_offset, int distance, D
     /* scale is based on distance; 1 means half size, 2 regular, 4 means scale by 2x, etc. */
     bool tiledWall = tile->isTiledInDungeon();
     const int *dscale = tiledWall ? lscale : nscale;
-    SCALED_VAR
     Image *scaled;
 
     if (dscale[distance] == 0)
         return;
     else if (dscale[distance] == 1)
-        scaled = screenScaleDown(animated, 2);
+        scaled = scaleDown(animated, 2);
     else
-        scaled = screenScale(animated, dscale[distance] / 2, 1, 0);
+        scaled = scaleUp(animated, dscale[distance] / 2, 1, 0);
 
     if (tiledWall) {
-        int i_x = SCALED((VIEWPORT_W * tileWidth  / 2) + this->x) - (scaled->width() / 2);
-        int i_y = SCALED((VIEWPORT_H * tileHeight / 2) + this->y) - (scaled->height() / 2);
+        int i_x = ((VIEWPORT_W * tileWidth  / 2) + this->x) - (scaled->width() / 2);
+        int i_y = ((VIEWPORT_H * tileHeight / 2) + this->y) - (scaled->height() / 2);
         int f_x = i_x + scaled->width();
         int f_y = i_y + scaled->height();
         int d_x = animated->width();
@@ -207,8 +207,8 @@ void DungeonView::drawInDungeon(const MapTile& mt, int x_offset, int distance, D
     }
     else {
         int y_offset = std::max(0,(dscale[distance] - offset_adj) * offset_multiplier);
-        int x = SCALED((VIEWPORT_W * tileWidth / 2) + this->x) - (scaled->width() / 2);
-        int y = SCALED((VIEWPORT_H * tileHeight / 2) + this->y + y_offset) - (scaled->height() / 8);
+        int x = ((VIEWPORT_W * tileWidth / 2) + this->x) - (scaled->width() / 2);
+        int y = ((VIEWPORT_H * tileHeight / 2) + this->y + y_offset) - (scaled->height() / 8);
 
         Image::enableBlend(1);
         scaled->draw(x, y);
@@ -454,17 +454,13 @@ void DungeonView::cacheGraphicData() {
 }
 
 static void drawGraphic(const ImageInfo* info, const SubImage* subimage,
-                        int x, int y, int sscale) {
-    x = SCALED(BORDER_WIDTH  + x);
-    y = SCALED(BORDER_HEIGHT + y);
+                        int x, int y) {
+    x += BORDER_WIDTH;
+    y += BORDER_HEIGHT;
 
     if (subimage) {
-        int scalep = sscale / info->prescale;
-        info->image->drawSubRect(x, y,
-                                 subimage->x * scalep,
-                                 subimage->y * scalep,
-                                 subimage->width * scalep,
-                                 subimage->height * scalep);
+        info->image->drawSubRect(x, y, subimage->x, subimage->y,
+                                 subimage->width, subimage->height);
     } else
         info->image->draw(x, y);
 }
@@ -473,7 +469,6 @@ void DungeonView::drawWall(int index) {
     const SubImage* subimage;
     int x, y;
     int i2;
-    unsigned int scale = SCALED_BASE;
 
     if (index < 0)
         return;
@@ -491,7 +486,7 @@ void DungeonView::drawWall(int index) {
     } else {
         x = y = 0;
     }
-    drawGraphic(graphic[index].info, subimage, x, y, scale);
+    drawGraphic(graphic[index].info, subimage, x, y);
 
     // FIXME: subimage2 is a horrible hack, needs to be cleaned up
     i2 = dngGraphicInfo[index].subimage2;
@@ -503,7 +498,7 @@ void DungeonView::drawWall(int index) {
             x = dngGraphicInfo[index].vga_x2;
             y = dngGraphicInfo[index].vga_y2;
         }
-        drawGraphic(graphic[i2].info, graphic[i2].sub, x, y, scale);
+        drawGraphic(graphic[i2].info, graphic[i2].sub, x, y);
     }
 }
 

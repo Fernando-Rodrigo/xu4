@@ -127,7 +127,7 @@ private:
 
 /* map and screen functions */
 void gameSetViewMode(ViewMode newMode);
-void gameUpdateScreen(void);
+void gameUpdateScreen();
 
 /* spell functions */
 void castSpell(int player = -1);
@@ -149,13 +149,10 @@ bool fireAt(const Coords &coords, bool originAvatar);
 Direction gameGetDirection();
 void readyWeapon(int player = -1);
 
-/* checking functions */
-void gameCheckHullIntegrity(void);
-
 /* creature functions */
 bool creatureRangeAttack(const Coords &coords, Creature *m);
-void gameCreatureCleanup(void);
 bool gameSpawnCreature(const class Creature *m);
+void gameDestroyAllCreatures();
 
 /* etc */
 void gameBadCommand();
@@ -163,7 +160,7 @@ string gameGetInput(int maxlen = 32);
 int gameGetPlayer(bool canBeDisabled, bool canBeActivePlayer);
 void gameGetPlayerForCommand(bool (*commandFn)(int player), bool canBeDisabled, bool canBeActivePlayer);
 void gameDamageParty(int minDamage, int maxDamage);
-void gameDamageShip(int minDamage, int maxDamage);
+bool gameDamageShip(int minDamage, int maxDamage);
 void gameSetActivePlayer(int player);
 vector<Coords> gameGetDirectionalActionPath(int dirmask, int validDirections, const Coords &origin, int minDistance, int maxDistance, bool (*blockedPredicate)(const Tile *tile), bool includeBlocked);
 

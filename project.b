@@ -1,8 +1,7 @@
 options [
 	os_api: 'allegro	"Platform API ('allegro 'sdl)"
-	use_gl: true
-	use_boron: true
-	boron_sdk: none		"Path to Boron headers and libraries"
+	use_faun: true
+	sdk_dir: none		"Path to Boron/Faun headers and libraries (UNIX only)"
 	gpu_render: false
 	make_util: true
 ]
@@ -24,6 +23,12 @@ libxml2: does [
 
 exe %xu4 [
 	include_from [%src %src/lzw %src/support]
+	unix [
+		if sdk_dir [
+			include_from join sdk_dir %/include
+			lflags rejoin ["-L" sdk_dir %/lib]
+		]
+	]
 	win32 [
 		include_from %../usr/include
 		include-define "_WIN32"		; Needed to archive glad.*
@@ -32,15 +37,23 @@ exe %xu4 [
 	switch os_api [
 		allegro [
 			unix [
-				libs [%allegro_acodec %allegro_audio %allegro]
+				libs pick [
+					[%allegro %faun %pulse-simple %pulse %vorbisfile]
+					[%allegro_acodec %allegro_audio %allegro]
+				] use_faun
 			]
 			win32 [
-				libs_from %../usr/lib [%allegro_acodec %allegro_audio %allegro]
+				libs_from %../usr/lib pick [
+					[%allegro %faun %vorbisfile %ole32]
+					[%allegro_acodec %allegro_audio %allegro]
+				] use_faun
 			]
-			sources_from %src [
+			sources_from %src reduce [
 				%event_allegro.cpp
 				%screen_allegro.cpp
-				%sound_allegro.cpp
+				either use_faun
+					%sound_faun.cpp
+					%sound_allegro.cpp
 			]
 		]
 		sdl [
@@ -54,16 +67,11 @@ exe %xu4 [
 		]
 	]
 
-	either use_boron [
+	;if use_boron [
 		cflags "-DUSE_BORON -DCONF_MODULE"
 		unix [
-			either [boron_sdk] [
-				include_from join boron_sdk %/include
-				libs_from    join boron_sdk %/lib %boron
-				libs %pthread
-			][
-				libs %boron
-			]
+			libs %boron
+			if sdk_dir [libs %pthread]  ; Needed for static libboron.
 		]
 		win32 [
 			libs_from %../usr/lib either msvc %libboron %boron
@@ -71,23 +79,14 @@ exe %xu4 [
 		]
 		sources_from %src [
 			%config_boron.cpp
+			%module.c
 			%support/cdi.c
 		]
-	][
-		libxml2
-		sources_from %src [
-			%config_xml.cpp
-			%script_xml.cpp
-			%xml.cpp
-			%support/SymbolTable.cpp
-		]
-	]
+	;]
 
-	if use_gl [
-		if gpu_render [cflags "-DGPU_RENDER"]
-		cflags "-DUSE_GL"
-		opengl
-	]
+	if gpu_render [cflags "-DGPU_RENDER"]
+	cflags "-DUSE_GL"
+	opengl
 
 	unix [
 		cflags "-Wno-unused-parameter"
@@ -106,10 +105,9 @@ exe %xu4 [
 		include_from %src/win32
 		sources/flags [%src/win32/xu4.rc] "-I src/win32"
 	]
-	cflags {-DVERSION=\"KR-1.0\"}
+	cflags {-DVERSION=\"DR-1.0\"}
 
 	sources_from %src [
-		%anim.c
 		%annotation.cpp
 		%aura.cpp
 		%camp.cpp
@@ -162,7 +160,6 @@ exe %xu4 [
 		%tileset.cpp
 		%tileview.cpp
 		%u4file.cpp
-		%utils.cpp
 		%unzip.c
 		%view.cpp
 		%xu4.cpp

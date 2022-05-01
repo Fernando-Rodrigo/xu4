@@ -196,7 +196,7 @@ static bool sound_load(Sound sound) {
         const CDIEntry* ent = config_soundFile(sound);
         if (ent) {
             ALLEGRO_FILE* slice;
-            ALLEGRO_FILE* af = al_fopen(xu4.config->modulePath(), "rb");
+            ALLEGRO_FILE* af = al_fopen(xu4.config->modulePath(ent), "rb");
             if (af) {
                 al_fseek(af, ent->offset, ALLEGRO_SEEK_SET);
                 slice = al_fopen_slice(af, ent->bytes, "r");
@@ -255,6 +255,20 @@ void soundPlay(Sound sound, bool onlyOnce, int durationLimitMSec) {
 }
 
 /*
+ * Return duration in milliseconds.
+ */
+int soundDuration(Sound sound) {
+    if (! audioFunctional)
+        return 0;
+    if (sa_samples[sound] == NULL) {
+        if (! sound_load(sound))
+            return 0;
+    }
+    const ALLEGRO_SAMPLE* spl = sa_samples[sound];
+    return al_get_sample_length(spl) * 1000 / al_get_sample_frequency(spl);
+}
+
+/*
  * Stop all sound effects.  Use musicStop() to halt music playback.
  */
 void soundStop() {
@@ -301,7 +315,7 @@ static bool music_load(int music, float newGain) {
     const CDIEntry* ent = config_musicFile(music);
     if (ent) {
         if (! moduleFile)
-            moduleFile = al_fopen(xu4.config->modulePath(), "rb");
+            moduleFile = al_fopen(xu4.config->modulePath(ent), "rb");
 
         if (moduleFile) {
             ALLEGRO_FILE* slice;

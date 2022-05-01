@@ -767,17 +767,6 @@ bool Party::canPersonJoin(string name, Virtue *v) {
 }
 
 /**
- * Damages the party's ship
- */
-void Party::damageShip(unsigned int pts) {
-    saveGame->shiphull -= pts;
-    if ((short)saveGame->shiphull < 0)
-        saveGame->shiphull = 0;
-
-    notifyOfChange();
-}
-
-/**
  * Donates 'quantity' gold. Returns true if the donation succeeded,
  * or false if there was not enough gold to make the donation
  */
@@ -867,6 +856,25 @@ int Party::getTorchDuration() const {
 }
 
 /**
+ * Damages the party's ship.
+ *
+ * Return true if the ship sinks (hull goes below zero).
+ */
+bool Party::damageShip(unsigned int pts) {
+    bool sunk;
+    if (pts > saveGame->shiphull) {
+        saveGame->shiphull = 0;
+        sunk = true;
+    } else {
+        saveGame->shiphull -= pts;
+        sunk = false;
+    }
+
+    notifyOfChange();
+    return sunk;
+}
+
+/**
  * Heals the ship's hull strength by 'pts' points
  */
 void Party::healShip(unsigned int pts) {
@@ -903,16 +911,11 @@ bool Party::isImmobilized() {
  * Whether or not all the party members are dead.
  */
 bool Party::isDead() {
-    int i;
-    bool dead = true;
-
-    for (i = 0; i < saveGame->members; i++) {
-        if (!members[i]->isDead()) {
-            dead = false;
-        }
+    for (int i = 0; i < saveGame->members; i++) {
+        if (! members[i]->isDead())
+            return false;
     }
-
-    return dead;
+    return true;
 }
 
 /**

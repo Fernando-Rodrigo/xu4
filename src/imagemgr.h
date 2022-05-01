@@ -137,9 +137,7 @@ struct AtlasSubImage {
 struct SubImage {
     Symbol name;
     int16_t x, y, width, height;
-#ifdef USE_GL
     uint16_t celCount;
-#endif
 };
 
 enum ImageFixup {
@@ -170,14 +168,11 @@ public:
     int16_t width, height;
     int16_t subImageCount;
     uint8_t depth;
-    uint8_t prescale;
     uint8_t filetype;
     uint8_t fixup;              /**< a routine to do miscellaneous fixes to the image */
     Image *image;               /**< the image we're describing */
-#ifdef USE_GL
     uint32_t tex;               /**< OpenGL texture name */
     const float* tileTexCoord;  /**< Indexed by VisualId */
-#endif
     const SubImage* subImages;
     std::map<Symbol, int> subImageIndex;
 };
@@ -205,7 +200,7 @@ public:
     ~ImageMgr();
 
     ImageInfo* imageInfo(Symbol name, const SubImage** subPtr);
-    ImageInfo* get(Symbol name, bool returnUnscaled=false);
+    ImageInfo* get(Symbol name);
 
     uint16_t setResourceGroup(uint16_t group);
     void freeResourceGroup(uint16_t group);
@@ -216,15 +211,15 @@ public:
 private:
     static void notice(int, void*, void*);
     const SubImage* getSubImage(Symbol name, ImageInfo** infoPtr);
-    ImageInfo* load(ImageInfo* info, bool returnUnscaled);
+    ImageInfo* load(ImageInfo* info);
     U4FILE * getImageFile(ImageInfo *info);
     ImageSet* scheme(Symbol setname);
     ImageInfo* getInfoFromSet(Symbol name, ImageSet *set);
 
-    void fixupIntro(Image *im, int prescale);
+    void fixupIntro(Image *im);
     void fixupAbyssVision(Image32*);
     void fixupTransparent(Image*, RGBA color);
-    void fixupAbacus(Image *im, int prescale);
+    void fixupAbacus(Image *im);
     void fixupDungNS(Image *im);
     void fixupFMTowns(Image *im);
 

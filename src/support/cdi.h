@@ -1,3 +1,5 @@
+#ifndef CDI_H
+#define CDI_H
 /*
   Concise Data Identifer
   Version 0.2
@@ -54,6 +56,13 @@
 #define DA7A_AUDIO_WAVE             CDI32(0xDA,0x7A,0x20,0x06)
 #define DA7A_AUDIO_MP3              CDI32(0xDA,0x7A,0x20,0x07)
 #define DA7A_AUDIO_OGG_VORBIS       CDI32(0xDA,0x7A,0x20,0x08)
+#define DA7A_AUDIO_OGG_OPUS         CDI32(0xDA,0x7A,0x20,0x09)
+#define DA7A_AUDIO_AAC              CDI32(0xDA,0x7A,0x20,0x10)
+#define DA7A_AUDIO_FLAC             CDI32(0xDA,0x7A,0x20,0x11)
+#define DA7A_AUDIO_IMPULSE_TRACKER  CDI32(0xDA,0x7A,0x20,0x20)
+#define DA7A_AUDIO_RFX              CDI32(0xDA,0x7A,0x20,0x30)
+
+#define DA7A_BYTECODE_BORON         CDI32(0xDA,0x7A,0x40,0x07)
 
 #define DA7A_GEOMETRY_OBJ           CDI32(0xDA,0x7A,0x50,0x00)
 #define DA7A_GEOMETRY_GLTF          CDI32(0xDA,0x7A,0x50,0x01)
@@ -110,3 +119,5 @@ void cdi_swap32(uint32_t* vars, size_t count);
 #ifdef __cplusplus
 }
 #endif
+
+#endif  // CDI_H

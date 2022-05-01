@@ -5,6 +5,7 @@ usage: {{
 Usage: pack-xu4 [<OPTIONS>] <module-path>
 
 Options:
+  -f           File package mode (skip config).
   -h           Print this help and exit.
   -o <module>  Output module file.
   -v <level>   Set verbose level. (0-2, default is 1)
@@ -13,15 +14,17 @@ Options:
 
 root-path: %module/Ultima-IV/
 module-file: none
+file-package: false
 verbose: 1
 
 forall args [
     switch first args [
         "-v" [verbose: to-int second ++ args]
+        "-f" [file-package: true]
         "-h" [print usage quit]
         "-o" [module-file: to-file second ++ args]
         "--version" [print "pack-xu4 0.1.1" quit]
-        [root-path: to-file first args]
+        [root-path: terminate to-file first args '/']
     ]
 ]
 
@@ -35,38 +38,9 @@ fatal: func ['code msg] [
     ] code
 ]
 
-config-file: join terminate root-path '/' %config.b
-ifn exists? config-file [
-    fatal noinput ["Cannot find config" config-file]
-]
-
 ifn module-file [
-    module-file: join last split root-path '/' %.mod
+    module-file: join last split root-path '/' either file-package %.pak %.mod
 ]
-
-; Matches ConfigValues in config_boron.cpp.
-config: context [
-    author:
-    about:
-    version:
-    rules:
-    armors:
-    weapons:
-    creatures:
-    graphics:
-    layouts:
-    maps:
-    tile-rules:
-    tileset:
-    u4-save-ids:
-    music:
-    sound:
-    vendors:
-    ega-palette:
-        none
-]
-
-apair: func [series a b] [append append series a b]
 
 enum-value: func [list val] [
     either pos: find list val [sub index? pos 1] 0
@@ -229,7 +203,7 @@ cdi-string-table1: func [dict] [
     foreach str dict [
         append v16 size? store
         ifn string? str [str: to-string str]
-        apair store str '^0'
+        appair store str '^0'
     ]
     construct binary! reduce [
         'u8 1 0 'u16 'big-endian size? v16
@@ -311,14 +285,95 @@ print-toc: does [
 ]
 
 ;---------------------------------------
+
+; Pull in shader files
+pack-shaders: does [
+    if exists? spath: join root-path %shader/ [
+        sout: make binary! 4096
+        code: complement charset "^//"
+        strip-shader: func [shader] [
+            clear sout
+            emit-span: [(append sout slice span end) span:]
+            parse span: shader [any[
+                end: some code
+              | "//" to '^/'   emit-span
+              | "/*" thru "*/" emit-span
+              | some '^/'      emit-span (append sout '^/')
+              | skip
+            ]]
+            append sout slice span end
+        ]
+
+        sl_id: "SL^0^0"
+        foreach file read spath [
+            switch file-ext file [
+                %.glsl [
+                    poke-id sl_id file-id file
+                    ifn file-id-seen [
+                        cdi-chunk 0x0001 sl_id
+                            strip-shader read/into join spath file file_buf
+                    ]
+                ]
+                %.png [
+                    pack-png spath file
+                ]
+            ]
+        ]
+    ]
+]
+
+if file-package [
+    cdi-begin "xuB^2"
+    pack-shaders
+
+    if ge? verbose 2 [probe file-dict]
+
+    cdi-chunk 0x0006 "FNAM" cdi-string-table1 file-dict
+    cdi-end
+
+    if ge? verbose 1 [print-toc]
+    quit
+]
+
+;---------------------------------------
 ; Load module configuration
 
-module: func [blk] [do blk]
+config-file: join root-path %config.b
+ifn exists? config-file [
+    fatal noinput ["Cannot find config" config-file]
+]
+
+; Matches ModInfoValues in module.c.
+modi: context [
+    about:
+    author:
+    rules:
+    version:
+        none
+]
+
+module: func [blk] [do bind blk modi]
 
 includes: []
 include: func [file] [append includes file]
 
-cfg: make config load config-file
+; Matches ConfigValues in config_boron.cpp.
+cfg: make context [
+    armors:
+    weapons:
+    creatures:
+    graphics:
+    layouts:
+    maps:
+    tile-rules:
+    tileset:
+    u4-save-ids:
+    music:
+    sound:
+    vendors:
+    ega-palette:
+        none
+] load config-file
 
 foreach file includes [
     do bind load join root-path file cfg
@@ -394,12 +449,14 @@ process-sound: func [blk app_id] [
     n: 0
     app_id: copy app_id
     parse blk [some[
-        tok: file!  (
+        tok: file! (
             fname: first tok
             fmt: select [
-                ".wav" 0x2006
-                ".mp3" 0x2007
-                ".ogg" 0x2008
+                ".wav"  0x2006
+                ".mp3"  0x2007
+                ".ogg"  0x2008
+                ".flac" 0x2011
+                ".rfx"  0x2030
             ] ext: file-ext fname
             ifn fmt [fatal config ["Unknown audio file extension" ext]]
 
@@ -407,6 +464,7 @@ process-sound: func [blk app_id] [
 
             cdi-chunk fmt app_id read join path first tok
         )
+      | int! (n: first tok)
       | 'path file! (path: terminate join root-path second tok '/')
     ]]
     n
@@ -464,7 +522,8 @@ map-portals: []
 map-moongates: none
 map-roles: none
 
-cdi-begin "xu4^1"
+cdi-begin "xuB^2"
+pack-shaders
 
 process-cfg [
     music: process-sound music "MU^0^0"
@@ -472,7 +531,7 @@ process-cfg [
 
     process-blk armors [
         tok: string! int! opt [word! block!] (
-            apair blk first tok to-coord reduce [
+            appair blk first tok to-coord reduce [
                 second tok
                 make-constraint skip tok 2
             ]
@@ -508,7 +567,7 @@ process-cfg [
                 none-zero at/exp
                 none-zero at/encounterSize
             ]
-            apair blk at/name at/tile
+            appair blk at/name at/tile
 
             amask: or none-zero select [food 0x01  gold 0x02] at/steals
                       none-zero select [sleep 0x04  negate 0x80] at/casts
@@ -593,7 +652,7 @@ process-cfg [
               do emit-name append out to-coord [pos size frames]
               do next-tile
               loop sub frames 1 [
-                  apair out mark-sol '_cel to-coord [pos size]
+                  appair out mark-sol '_cel to-coord [pos size]
                   do next-tile
               ]
             )
@@ -615,7 +674,7 @@ process-cfg [
                 extends: first name
                 name: second name
             ]
-            apair blk mark-sol 'imageset name
+            appair blk mark-sol 'imageset name
             append blk extends
             append/block blk img-blk: make block! 0
         ) into [some [
@@ -628,8 +687,8 @@ process-cfg [
                     ftype: at/filetype
                 ]
 
-                apair img-blk mark-sol at/name fname
-                apair img-blk to-coord reduce [
+                appair img-blk mark-sol at/name fname
+                appair img-blk to-coord reduce [
                     none-neg1 at/width
                     none-neg1 at/height
                     none-neg1 at/depth
@@ -652,13 +711,13 @@ process-cfg [
                 ]
             )
           | tok: set-word! 'atlas coord! block! (
-                apair img-blk mark-sol to-word first tok 'atlas
+                appair img-blk mark-sol to-word first tok 'atlas
                 append img-blk third tok
                 append/block img-blk pick tok 4
             )
         ]]
       | 'tileanimset set name word! (
-            apair blk mark-sol 'tileanims name
+            appair blk mark-sol 'tileanims name
             anim-dict: make block! 8
             transforms: make binary! 512
         ) into [some [
@@ -667,7 +726,7 @@ process-cfg [
                 anim-chance: 0
                 if eq? 'random first aspec [anim-chance: second aspec]
 
-                apair anim-dict
+                appair anim-dict
                     to-word first tok
                     to-coord reduce [
                         div size? transforms 20     ; sizeof(TileAnimTransform)
@@ -703,7 +762,7 @@ process-cfg [
 
     process-blk tile-rules [
         set at paren! (
-            apair blk mark-sol at/name to-coord reduce [
+            appair blk mark-sol at/name to-coord reduce [
                 enum-value [fast slow vslow vvslow]
                     at/speed
                 enum-value [none fire sleep poison poisonfield electricity lava]
@@ -738,9 +797,9 @@ process-cfg [
 
     process-blk tileset [
         set at paren! (
-            apair blk mark-sol at/name at/rule
-            apair blk at/image at/animation
-            apair blk at/directions to-coord reduce [
+            appair blk mark-sol at/name at/rule
+            appair blk at/image at/animation
+            appair blk at/directions to-coord reduce [
                 none-zero at/frames
                 none-zero select [square 1 round 2] at/opaque
                 attribute-flags at [
@@ -763,7 +822,7 @@ process-cfg [
                 fname: to-file fname
             ]
 
-            apair blk mark-sol fname to-coord reduce [
+            appair blk mark-sol fname to-coord reduce [
                 at/id
                 enum-value [world city shrine combat dungeon] at/type
                 enum-value [wrap exit fixed] at/borderbehavior
@@ -792,7 +851,7 @@ process-cfg [
                 if block? first content [
                     ; Merge retroActiveDest into attributes to be used below.
                     if it: content/1/retroActiveDest [
-                        apair at2 to-set-word 'retroActiveDest
+                        appair at2 to-set-word 'retroActiveDest
                             to-coord reduce [it/x it/y none-zero it/z it/mapid]
                     ]
                 ]
@@ -825,9 +884,9 @@ process-cfg [
                     dest
                 ] none
             )
-          | 'dungeon  set at2 paren! (apair blk at2/name at2/rooms)
+          | 'dungeon  set at2 paren! (appair blk at2/name at2/rooms)
           | 'shrine   set at2 paren! (
-                apair blk at2/mantra enum-value [
+                appair blk at2/mantra enum-value [
                     "honesty" "compassion" "valor" "justice"
                     "sacrifice" "honor" "spirituality" "humility"
                 ] at2/virtue
@@ -837,7 +896,7 @@ process-cfg [
             append/block blk map-labels
 
             emit-attr-block blk map-portals [
-                apair dest mark-sol it/message it/condition
+                appair dest mark-sol it/message it/condition
                 append dest to-coord reduce [
                     none-zero it/x
                     none-zero it/y
@@ -876,55 +935,24 @@ process-cfg [
     if ega-palette [
         bin: make binary! mul 16 4
         foreach it ega-palette [
-            apair bin first it second it
-            apair bin third it 255
+            appair bin first it second it
+            appair bin third it 255
         ]
         ega-palette: bin
     ]
 ]
 
-; Pull in shader files
-if exists? spath: join root-path %shader/ [
-    sout: make binary! 4096
-    code: complement charset "^//"
-    strip-shader: func [shader] [
-        clear sout
-        emit-span: [(append sout slice span end) span:]
-        parse span: shader [any[
-            end: some code
-          | "//" to '^/'   emit-span
-          | "/*" thru "*/" emit-span
-          | some '^/'      emit-span (append sout '^/')
-          | skip
-        ]]
-        append sout slice span end
-    ]
-
-    sl_id: "SL^0^0"
-    foreach file read spath [
-        switch file-ext file [
-            %.glsl [
-                poke-id sl_id file-id file
-                ifn file-id-seen [
-                    cdi-chunk 0x0001 sl_id
-                        strip-shader read/into join spath file file_buf
-                ]
-            ]
-            %.png [
-                pack-png spath file
-            ]
-        ]
-    ]
-]
-
-
 if ge? verbose 2 [
+    probe modi
     probe cfg
     probe file-dict
 ]
 
+cdi-chunk 0x0006 "MODI" cdi-string-table1 values-of modi
 cdi-chunk 0x7FC0 "CONF" serialize reduce [cfg]
-cdi-chunk 0x0006 "FNAM" cdi-string-table1 file-dict
+ifn empty? file-dict [
+    cdi-chunk 0x0006 "FNAM" cdi-string-table1 file-dict
+]
 cdi-end
 
 if ge? verbose 1 [print-toc]

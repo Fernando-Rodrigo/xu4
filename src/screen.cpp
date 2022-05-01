@@ -18,16 +18,12 @@
 #include "event.h"
 #include "game.h"
 #include "imagemgr.h"
-#include "scale.h"
 #include "settings.h"
 #include "textview.h"
 #include "tileanim.h"
 #include "tileset.h"
 #include "xu4.h"
-
-#ifdef USE_GL
 #include "gpu.h"
-#endif
 
 #ifdef IOS
 #include "ios_helpers.h"
@@ -47,7 +43,6 @@ struct Screen {
     ImageInfo* gemTilesInfo;
     char* msgBuffer;
     ScreenState state;
-    Scaler filterScaler;
     int dispWidth;      // Full display pixel dimensions.
     int dispHeight;
     int aspectW;        // Aspect-correct pixel dimensions.
@@ -145,21 +140,12 @@ static void screenInit_data(Screen* scr, Settings& settings) {
     scr->blockingUpdate = NULL;
 #endif
 
-    scr->filterScaler = scalerGet(settings.filter);
-    if (! scr->filterScaler)
-        errorFatal("Invalid filter %d", settings.filter);
-
     /* If we can't use VGA graphics then reset to EGA. */
     if (! u4isUpgradeAvailable() && settings.videoType == "VGA")
         settings.videoType = "EGA";
 
     // Create a special purpose image that represents the whole screen.
-    xu4.screenImage = Image::create
-#ifdef USE_GL
-        (320, 200);
-#else
-        (320 * settings.scale, 200 * settings.scale);
-#endif
+    xu4.screenImage = Image::create(320, 200);
     xu4.screenImage->fill(Image::black);
 
     xu4.imageMgr = new ImageMgr;
@@ -438,11 +424,7 @@ const vector<string>& screenGetGemLayoutNames() {
 
 const char** screenGetFilterNames() {
     static const char* filterNames[] = {
-#ifdef USE_GL
         "point", "HQX", "xBR-lv2", NULL
-#else
-        "point", "2xBi", "2xSaI", "Scale2x", NULL
-#endif
     };
     return filterNames;
 }
@@ -716,7 +698,6 @@ void screenUpdate(TileView *view, bool showmap, bool blackout) {
     screenUploadToGPU();
 }
 
-#ifdef USE_GL
 /**
  * Transfer the contents of the screenImage to the GPU.
  * This function will be removed after GPU rendering is fully implemented.
@@ -765,7 +746,6 @@ void screenRender() {
     }
 #endif
 }
-#endif
 
 void screenDrawImageInMapArea(Symbol name) {
     ImageInfo *info;
@@ -774,11 +754,10 @@ void screenDrawImageInMapArea(Symbol name) {
     if (!info)
         errorLoadImage(name);
 
-    SCALED_VAR;
-    info->image->drawSubRect(SCALED(BORDER_WIDTH), SCALED(BORDER_HEIGHT),
-                             SCALED(BORDER_WIDTH), SCALED(BORDER_HEIGHT),
-                             VIEWPORT_W * SCALED(TILE_WIDTH),
-                             VIEWPORT_H * SCALED(TILE_HEIGHT));
+    info->image->drawSubRect(BORDER_WIDTH, BORDER_HEIGHT,
+                             BORDER_WIDTH, BORDER_HEIGHT,
+                             VIEWPORT_W * TILE_WIDTH,
+                             VIEWPORT_H * TILE_HEIGHT);
 }
 
 /**
@@ -809,9 +788,8 @@ void screenTextColor(int color) {
  */
 void screenShowChar(int chr, int x, int y) {
     Image* charset = xu4.screen->charsetInfo->image;
-    SCALED_VAR
     int charW = charset->width();
-    int charH = SCALED(CHAR_HEIGHT);
+    int charH = CHAR_HEIGHT;
     int colorFG = xu4.screen->colorFG;
 
     if (colorFG == FONT_COLOR_INDEX(FG_WHITE)) {
@@ -830,10 +808,9 @@ void screenShowChar(int chr, int x, int y) {
  */
 static void screenScrollMessageArea() {
     ImageInfo* charset = xu4.screen->charsetInfo;
-    SCALED_VAR
     Image* screen = xu4.screenImage;
     int charW = charset->image->width();
-    int charH = SCALED(CHAR_HEIGHT);
+    int charH = CHAR_HEIGHT;
 
     screen->drawSubRectOn(screen,
                           TEXT_AREA_X * charW, TEXT_AREA_Y * charH,
@@ -1416,17 +1393,15 @@ void screenRedrawMapArea() {
 }
 
 void screenEraseMapArea() {
-    SCALED_VAR
-    xu4.screenImage->fillRect(SCALED(BORDER_WIDTH), SCALED(BORDER_HEIGHT),
-                              VIEWPORT_W * SCALED(TILE_WIDTH),
-                              VIEWPORT_H * SCALED(TILE_HEIGHT),
+    xu4.screenImage->fillRect(BORDER_WIDTH, BORDER_HEIGHT,
+                              VIEWPORT_W * TILE_WIDTH,
+                              VIEWPORT_H * TILE_HEIGHT,
                               0, 0, 0);
 }
 
 void screenEraseTextArea(int x, int y, int width, int height) {
-    SCALED_VAR
-    int charW = SCALED(CHAR_WIDTH);
-    int charH = SCALED(CHAR_HEIGHT);
+    int charW = CHAR_WIDTH;
+    int charH = CHAR_HEIGHT;
     xu4.screenImage->fillRect(x * charW, y * charH,
                               width * charW, height * charH, 0, 0, 0);
 }
@@ -1437,8 +1412,7 @@ void screenEraseTextArea(int x, int y, int width, int height) {
 void screenShake(int iterations) {
     if (xu4.settings->screenShakes) {
         Screen* scr = xu4.screen;
-        SCALED_VAR
-        int shakeOffset = SCALED(1);
+        int shakeOffset = 1;
 
         for (int i = 0; i < iterations; i++) {
             // shift the screen down and make the top row black
@@ -1458,7 +1432,6 @@ void screenShake(int iterations) {
 static void screenShowGemTile(const Layout *layout, const Map *map,
                               MapTile &t, bool focus, int x, int y) {
     Screen* scr = xu4.screen;
-    SCALED_VAR
     unsigned int tile = xu4.config->usaveIds()->ultimaId(t);
 
     if (map->type == Map::DUNGEON) {
@@ -1467,12 +1440,12 @@ static void screenShowGemTile(const Layout *layout, const Map *map,
         std::map<string, int>::iterator charIndex = scr->dungeonTileChars.find(t.getTileType()->nameStr());
         if (charIndex != scr->dungeonTileChars.end()) {
             charsetInfo->image->drawSubRect(
-                SCALED((layout->viewport.x + (x * layout->tileshape.width))),
-                SCALED((layout->viewport.y + (y * layout->tileshape.height))),
+                layout->viewport.x + (x * layout->tileshape.width),
+                layout->viewport.y + (y * layout->tileshape.height),
                 0,
-                SCALED(charIndex->second * layout->tileshape.height),
-                SCALED(layout->tileshape.width),
-                SCALED(layout->tileshape.height));
+                charIndex->second * layout->tileshape.height,
+                layout->tileshape.width,
+                layout->tileshape.height);
         }
     }
     else {
@@ -1484,18 +1457,18 @@ static void screenShowGemTile(const Layout *layout, const Map *map,
 
         if (tile < 128) {
             scr->gemTilesInfo->image->drawSubRect(
-                SCALED((layout->viewport.x + (x * layout->tileshape.width))),
-                SCALED((layout->viewport.y + (y * layout->tileshape.height))),
+                layout->viewport.x + (x * layout->tileshape.width),
+                layout->viewport.y + (y * layout->tileshape.height),
                 0,
-                SCALED(tile * layout->tileshape.height),
-                SCALED(layout->tileshape.width),
-                SCALED(layout->tileshape.height));
+                tile * layout->tileshape.height,
+                layout->tileshape.width,
+                layout->tileshape.height);
         } else {
             xu4.screenImage->fillRect(
-                SCALED((layout->viewport.x + (x * layout->tileshape.width))),
-                SCALED((layout->viewport.y + (y * layout->tileshape.height))),
-                SCALED(layout->tileshape.width),
-                SCALED(layout->tileshape.height),
+                layout->viewport.x + (x * layout->tileshape.width),
+                layout->viewport.y + (y * layout->tileshape.height),
+                layout->tileshape.width,
+                layout->tileshape.height,
                 0, 0, 0);
         }
     }
@@ -1506,13 +1479,12 @@ void screenGemUpdate() {
     int x, y;
     const Layout* layout;
     const Map* map = c->location->map;
-    SCALED_VAR
     bool focus;
 
-    xu4.screenImage->fillRect(SCALED(BORDER_WIDTH),
-                              SCALED(BORDER_HEIGHT),
-                              SCALED(VIEWPORT_W * TILE_WIDTH),
-                              SCALED(VIEWPORT_H * TILE_HEIGHT),
+    xu4.screenImage->fillRect(BORDER_WIDTH,
+                              BORDER_HEIGHT,
+                              VIEWPORT_W * TILE_WIDTH,
+                              VIEWPORT_H * TILE_HEIGHT,
                               0, 0, 0);
 
     if (map->type == Map::DUNGEON) {
@@ -1610,65 +1582,6 @@ void screenGemUpdate() {
     screenUpdateMoons();
     screenUpdateWind();
     screenUploadToGPU();
-}
-
-/**
- * Scale an image up.  The resulting image will be scale * the
- * original dimensions.  The original image is no longer deleted.
- * n is the number of tiles in the image; each tile is filtered
- * seperately. filter determines whether or not to filter the
- * resulting image.
- */
-Image *screenScale(Image *src, int scale, int n, int filter) {
-    Image *dest = NULL;
-
-    if (n == 0)
-        n = 1;
-
-    Scaler filterScaler = xu4.screen->filterScaler;
-    if (filterScaler) {
-        while (filter && (scale % 2 == 0)) {
-            dest = (*filterScaler)(src, 2, n);
-            src = dest;
-            scale /= 2;
-        }
-        if (scale == 3 && scaler3x(xu4.settings->filter)) {
-            dest = (*filterScaler)(src, 3, n);
-            src = dest;
-            scale /= 3;
-        }
-    }
-
-    if (scale != 1)
-        dest = (*scalerGet(ScreenFilter_point))(src, scale, n);
-
-    if (!dest)
-        dest = Image::duplicate(src);
-
-    return dest;
-}
-
-/**
- * Scale an image down.  The resulting image will be 1/scale * the
- * original dimensions.  The original image is no longer deleted.
- */
-Image *screenScaleDown(Image *src, int scale) {
-    int x, y;
-    Image *dest;
-
-    dest = Image::create(src->width() / scale, src->height() / scale);
-    if (!dest)
-        return NULL;
-
-    for (y = 0; y < src->height(); y+=scale) {
-        for (x = 0; x < src->width(); x+=scale) {
-            unsigned int index;
-            src->getPixelIndex(x, y, index);
-            dest->putPixelIndex(x / scale, y / scale, index);
-        }
-    }
-
-    return dest;
 }
 
 ScreenState* screenState() {

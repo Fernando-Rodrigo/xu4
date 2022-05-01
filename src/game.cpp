@@ -39,28 +39,27 @@
 /* Functions BEGIN */
 
 /* spell functions */
-void mixReagents();
-bool mixReagentsForSpellU4(int spell);
-bool mixReagentsForSpellU5(int spell);
-void mixReagentsSuper();
-void newOrder();
+static void mixReagents();
+static bool mixReagentsForSpellU4(int spell);
+static bool mixReagentsForSpellU5(int spell);
+//static void mixReagentsSuper();
+static void newOrder();
 
 /* conversation functions */
-bool talkAt(const Coords &coords);
+static bool talkAt(const Coords &coords, int distance);
 
 /* action functions */
-bool attackAt(const Coords &coords);
-bool destroyAt(const Coords &coords);
-bool getChestTrapHandler(int player);
-bool jimmyAt(const Coords &coords);
-bool openAt(const Coords &coords);
-void wearArmor(int player = -1);
-void ztatsFor(int player = -1);
+static bool attackAt(const Coords &coords);
+static bool destroyAt(const Coords &coords);
+static bool getChestTrapHandler(int player);
+static bool jimmyAt(const Coords &coords);
+static bool openAt(const Coords &coords);
+static void wearArmor(int player = -1);
+static void ztatsFor(int player = -1);
 
 /* creature functions */
-void gameDestroyAllCreatures(void);
-void gameFixupObjects(Map *map, const SaveGameMonsterRecord* table);
-void gameCreatureAttack(Creature *obj);
+static void gameFixupObjects(Map *map, const SaveGameMonsterRecord* table);
+static void gameCreatureAttack(Creature *obj);
 
 /* Functions END */
 /*---------------*/
@@ -548,6 +547,33 @@ int GameController::exitToParentMap() {
     return 0;
 }
 
+static void gameKillParty() {
+    for (int i = 0; i < c->party->size(); i++) {
+        PartyMember* pc = c->party->member(i);
+        pc->setHp(0);
+        pc->setStatus(STAT_DEAD);
+    }
+    deathStart(5);
+}
+
+/**
+ * Return true if the party perishes at sea without a vessel.
+ */
+static void gameCheckDrowning() {
+    if (collisionOverride)
+        return;
+
+    const Location* loc = c->location;
+    if (c->transportContext == TRANSPORT_FOOT &&
+          loc->map->tileTypeAt(loc->coords, WITHOUT_OBJECTS)->isSailable() &&
+        ! loc->map->tileTypeAt(loc->coords, WITH_GROUND_OBJECTS)->isShip() &&
+        ! loc->map->getValidMoves(loc->coords, c->party->getTransport()))
+    {
+        screenMessage("\nTrapped at sea without thy ship, thou dost drown!\n\n");
+        gameKillParty();
+    }
+}
+
 /**
  * Terminates a game turn.  This performs the post-turn housekeeping
  * tasks like adjusting the party's food, incrementing the number of
@@ -565,7 +591,7 @@ void GameController::finishTurn() {
         /* count down the aura, if there is one */
         c->aura.passTurn();
 
-        gameCheckHullIntegrity();
+        gameCheckDrowning();
 
         /* update party stats */
         //c->stats->setView(STATS_PARTY_OVERVIEW);
@@ -583,7 +609,7 @@ void GameController::finishTurn() {
             Creature* attacker = map->moveObjects(c->location->coords);
 
             // Something's attacking!  Start combat!
-            if (attacker) {
+            if (attacker && ! c->party->isDead()) {
                 gameCreatureAttack(attacker);
                 return;
             }
@@ -1587,7 +1613,7 @@ void destroy() {
     screenMessage("%cNothing there!%c\n", FG_GREY, FG_WHITE);
 }
 
-bool destroyAt(const Coords &coords) {
+static bool destroyAt(const Coords &coords) {
     Object *obj = c->location->map->objectAt(coords);
 
     if (obj) {
@@ -1654,7 +1680,7 @@ static const Tile* battleGround(const Map* map, const Coords& coord) {
  * Attempts to attack a creature at map coordinates x,y.  If no
  * creature is present at that point, zero is returned.
  */
-bool attackAt(const Coords &coords) {
+static bool attackAt(const Coords &coords) {
     const Tile *ground;
     Creature *m;
     Map* map = c->location->map;
@@ -1851,16 +1877,18 @@ void fire() {
 
     screenMessage("Fire Cannon!\nDir: ");
     Direction dir = gameGetDirection();
-
     if (dir == DIR_NONE)
         return;
 
     // can only fire broadsides
     int broadsidesDirs = dirGetBroadsidesDirs(c->party->getDirection());
-    if (!DIR_IN_MASK(dir, broadsidesDirs)) {
+    if (! DIR_IN_MASK(dir, broadsidesDirs)) {
+        soundPlay(SOUND_BLOCKED);
         screenMessage("%cBroadsides Only!%c\n", FG_GREY, FG_WHITE);
         return;
     }
+
+    soundPlay(SOUND_CANNON);
 
     // nothing (not even mountains!) can block cannonballs
     vector<Coords> path = gameGetDirectionalActionPath(MASK_DIR(dir), broadsidesDirs, c->location->coords,
@@ -1869,6 +1897,19 @@ void fire() {
         if (fireAt(*i, true))
             return;
     }
+}
+
+static void hitPartyAtRange(const Coords& coords, int hitFrames) {
+    soundPlay(SOUND_PARTY_STRUCK);
+
+    /* FIXME: In u4dos this graphic remains on screen if the player's
+       ship is sunk. */
+    GameController::flashTile(coords, Tile::sym.hitFlash, hitFrames);
+
+    if (c->transportContext == TRANSPORT_SHIP)
+        gameDamageShip(-1, 10);
+    else
+        gameDamageParty(10, 25); /* party gets hurt between 10-25 damage */
 }
 
 bool fireAt(const Coords &coords, bool originAvatar) {
@@ -1903,11 +1944,7 @@ bool fireAt(const Coords &coords, bool originAvatar) {
 
         /* Is is a pirate ship firing at US? */
         if (hitsAvatar) {
-            GameController::flashTile(coords, Tile::sym.hitFlash, 4);
-
-            if (c->transportContext == TRANSPORT_SHIP)
-                gameDamageShip(-1, 10);
-            else gameDamageParty(10, 25); /* party gets hurt between 10-25 damage */
+            hitPartyAtRange(coords, 4);
         }
         /* inanimate objects get destroyed instantly, while creatures get a chance */
         else if (obj->objType == Object::UNKNOWN) {
@@ -1917,6 +1954,7 @@ bool fireAt(const Coords &coords, bool originAvatar) {
 
         /* only the avatar can hurt other creatures with cannon fire */
         else if (originAvatar) {
+            soundPlay(SOUND_NPC_STRUCK);
             GameController::flashTile(coords, Tile::sym.hitFlash, 4);
             if (xu4_random(4) == 0) /* reverse-engineered from u4dos */
                 c->location->map->removeObject(obj);
@@ -1994,7 +2032,7 @@ void getChest(int player)
 /**
  * Called by getChest() to handle possible traps on chests
  **/
-bool getChestTrapHandler(int player) {
+static bool getChestTrapHandler(int player) {
     TileEffect trapType;
     int randNum = xu4_random(4);
 
@@ -2382,7 +2420,7 @@ void jimmy() {
  * door is replaced by a permanent annotation of an unlocked door
  * tile.
  */
-bool jimmyAt(const Coords &coords) {
+static bool jimmyAt(const Coords &coords) {
     Map* map = c->location->map;
     const Tile* tile = map->tileTypeAt(coords, WITH_OBJECTS);
 
@@ -2430,7 +2468,7 @@ void opendoor() {
  * Attempts to open a door at map coordinates x,y.  The door is
  * replaced by a temporary annotation of a floor tile for 4 turns.
  */
-bool openAt(const Coords &coords) {
+static bool openAt(const Coords &coords) {
     const Tile *tile = c->location->map->tileTypeAt(coords, WITH_OBJECTS);
 
     if (!tile->isDoor() &&
@@ -2517,14 +2555,16 @@ void talk() {
     }
 
     Direction dir = gameGetDirection();
-
     if (dir == DIR_NONE)
         return;
 
-    vector<Coords> path = gameGetDirectionalActionPath(MASK_DIR(dir), MASK_DIR_ALL, c->location->coords,
-                                                                       1, 2, &Tile::canTalkOverTile, true);
+    vector<Coords> path =
+        gameGetDirectionalActionPath(MASK_DIR(dir), MASK_DIR_ALL,
+                                     c->location->coords, 1, 2,
+                                     &Tile::canTalkOverTile, true);
+    int dist = 1;
     for (vector<Coords>::iterator i = path.begin(); i != path.end(); i++) {
-        if (talkAt(*i))
+        if (talkAt(*i, dist++))
             return;
     }
 
@@ -2535,7 +2575,7 @@ void talk() {
  * Mixes reagents.  Prompts for a spell, then which reagents to
  * include in the mix.
  */
-void mixReagents() {
+static void mixReagents() {
 
     /*  uncomment this line to activate new spell mixing code */
     //   return mixReagentsSuper();
@@ -2602,7 +2642,7 @@ void mixReagents() {
  * Prompts for spell reagents to mix in the traditional Ultima IV
  * style.
  */
-bool mixReagentsForSpellU4(int spell) {
+static bool mixReagentsForSpellU4(int spell) {
     Ingredients ingredients;
 
     screenMessage("Reagent: ");
@@ -2640,7 +2680,7 @@ bool mixReagentsForSpellU4(int spell) {
 /**
  * Prompts for spell reagents to mix with an Ultima V-like menu.
  */
-bool mixReagentsForSpellU5(int spell) {
+static bool mixReagentsForSpellU5(int spell) {
     Ingredients ingredients;
 
     screenDisableCursor();
@@ -2665,7 +2705,7 @@ bool mixReagentsForSpellU5(int spell) {
  * Exchanges the position of two players in the party.  Prompts the
  * user for the player numbers.
  */
-void newOrder() {
+static void newOrder() {
     screenMessage("New Order!\nExchange # ");
 
     int player1 = gameGetPlayer(true, false);
@@ -2759,7 +2799,7 @@ void peer(bool useGem) {
  * Begins a conversation with the NPC at map coordinates x,y.  If no
  * NPC is present at that point, zero is returned.
  */
-bool talkAt(const Coords &coords) {
+static bool talkAt(const Coords &coords, int distance) {
     /* can't have any conversations outside of town */
     City* city = static_cast<City*>(c->location->map);
     if (! isCity(city)) {
@@ -2785,6 +2825,12 @@ bool talkAt(const Coords &coords) {
         return discourse_run(dis, npcType - NPC_LORD_BRITISH, speaker);
     }
 
+    /* Prevent talking to ghosts & skeletons over the counter in Magincia.
+       In the DOS version ghosts on a counter space also ignore the player,
+       but will speak when they are inside walls. */
+    if (speaker->isUndead() && distance > 1)
+        return false;
+
     /* No response from alerted guards... does any monster both
        attack and talk besides Nate the Snake? */
     if (speaker->movement == MOVEMENT_ATTACK_AVATAR &&
@@ -2798,7 +2844,7 @@ bool talkAt(const Coords &coords) {
  * Changes a player's armor.  Prompts for the player and/or the armor
  * type if not provided.
  */
-void wearArmor(int player) {
+static void wearArmor(int player) {
 
     // get the player if not provided
     if (player == -1) {
@@ -2838,7 +2884,7 @@ void wearArmor(int player) {
 /**
  * Called when the player selects a party member for ztats
  */
-void ztatsFor(int player) {
+static void ztatsFor(int player) {
     // get the player if not provided
     if (player == -1) {
         screenMessage("Ztats for: ");
@@ -2897,42 +2943,6 @@ void GameController::timerFired() {
                 controller->keyPressed(U4_SPACE);
             }
         }
-    }
-}
-
-/**
- * Checks the hull integrity of the ship and handles
- * the ship sinking, if necessary
- */
-void gameCheckHullIntegrity() {
-    bool killAll = false;
-
-    /* see if the ship has sunk */
-    if ((c->transportContext == TRANSPORT_SHIP) && c->saveGame->shiphull <= 0)
-    {
-        screenMessage("\nThy ship sinks!\n\n");
-        killAll = true;
-    }
-
-    Location* loc = c->location;
-    if (! collisionOverride && c->transportContext == TRANSPORT_FOOT &&
-        loc->map->tileTypeAt(loc->coords, WITHOUT_OBJECTS)->isSailable() &&
-        ! loc->map->tileTypeAt(loc->coords, WITH_GROUND_OBJECTS)->isShip() &&
-        ! loc->map->getValidMoves(loc->coords, c->party->getTransport()))
-    {
-        screenMessage("\nTrapped at sea without thy ship, thou dost drown!\n\n");
-        killAll = true;
-    }
-
-    if (killAll)
-    {
-        for (int i = 0; i < c->party->size(); i++)
-        {
-            c->party->member(i)->setHp(0);
-            c->party->member(i)->setStatus(STAT_DEAD);
-        }
-
-        deathStart(5);
     }
 }
 
@@ -3035,7 +3045,7 @@ bool GameController::checkMoongates() {
  * Fixes objects initially loaded by saveGameMonstersRead,
  * and alters movement behavior accordingly to match the creature
  */
-void gameFixupObjects(Map *map, const SaveGameMonsterRecord* table) {
+static void gameFixupObjects(Map *map, const SaveGameMonsterRecord* table) {
     int i;
     const SaveGameMonsterRecord *it;
     Object* obj;
@@ -3091,7 +3101,7 @@ void gameFixupObjects(Map *map, const SaveGameMonsterRecord* table) {
 /**
  * Handles what happens when a creature attacks you
  */
-void gameCreatureAttack(Creature *m) {
+static void gameCreatureAttack(Creature *m) {
     const Tile *ground;
 
     screenMessage("\nAttacked by %s\n", m->getName().c_str());
@@ -3122,14 +3132,7 @@ bool creatureRangeAttack(const Coords &coords, Creature *m) {
 
     // Does the attack hit the avatar?
     if (coords == c->location->coords) {
-        /* always displays as a 'hit' */
-        GameController::flashTile(coords, tile, 3);
-
-        /* FIXME: check actual damage from u4dos -- values here are guessed */
-        if (c->transportContext == TRANSPORT_SHIP)
-            gameDamageShip(-1, 10);
-        else gameDamageParty(10, 25);
-
+        hitPartyAtRange(coords, 3);
         return true;
     }
     // Destroy objects that were hit
@@ -3241,20 +3244,24 @@ void gameDamageParty(int minDamage, int maxDamage) {
  * Deals an amount of damage between 'minDamage' and 'maxDamage'
  * to the ship.  If (minDamage == -1) or (minDamage >= maxDamage),
  * deals 'maxDamage' damage to the ship.
+ *
+ * Return true if the ship sinks and the party perishes.
  */
-void gameDamageShip(int minDamage, int maxDamage) {
-    int damage;
-
+bool gameDamageShip(int minDamage, int maxDamage) {
     if (c->transportContext == TRANSPORT_SHIP) {
-        damage = ((minDamage >= 0) && (minDamage < maxDamage)) ?
+        screenShake(1);
+
+        int damage = ((minDamage >= 0) && (minDamage < maxDamage)) ?
             xu4_random((maxDamage + 1) - minDamage) + minDamage :
             maxDamage;
 
-        screenShake(1);
-
-        c->party->damageShip(damage);
-        gameCheckHullIntegrity();
+        if (c->party->damageShip(damage)) {
+            screenMessage("\nThy ship sinks!\n\n");
+            gameKillParty();
+            return true;
+        }
     }
+    return false;
 }
 
 /**
@@ -3430,7 +3437,7 @@ bool gameSpawnCreature(const Creature *m) {
 /**
  * Destroys all creatures on the current map.
  */
-void gameDestroyAllCreatures(void) {
+void gameDestroyAllCreatures() {
     int i;
 
     gameSpellEffect('t', -1, SOUND_MAGIC); /* same effect as tremor */
@@ -3526,8 +3533,8 @@ showMixturesSuper(int page = 0) {
   }
 }
 
-void
-mixReagentsSuper() {
+#if 0
+static void mixReagentsSuper() {
 
   screenMessage("Mix reagents\n");
 
@@ -3625,3 +3632,4 @@ mixReagentsSuper() {
   c->location->viewMode = oldlocation;
   return;
 }
+#endif

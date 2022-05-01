@@ -6,7 +6,7 @@
 
 #include "debug.h"
 #include "event.h"
-#include "utils.h"
+#include "xu4.h"
 
 /**
  * Returns the opposite direction.
@@ -77,14 +77,14 @@ Direction dirRandomDir(int valid_directions_mask) {
 
     n = 0;
     for (i = DIR_WEST; i <= DIR_SOUTH; i++) {
-        if (DIR_IN_MASK(i, valid_directions_mask)) {
-            d[n] = static_cast<Direction>(i);
-            n++;
-        }
+        if (DIR_IN_MASK(i, valid_directions_mask))
+            d[n++] = (Direction) i;
     }
 
     if (n == 0)
         return DIR_NONE;
+    if (n == 1)
+        return d[0];
 
     return d[xu4_random(n)];
 }

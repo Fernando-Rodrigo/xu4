@@ -3,7 +3,7 @@ module [
     about: {{
         Ultima IV with original graphics.
     }}
-    version: "1.0-beta"
+    version: "1.1"
     rules: 'Ultima-IV
 ]
 
@@ -471,7 +471,7 @@ music: [
 ]
 
 sound: [
-    path %../../sound
+    path %sound
     %title_fade.ogg
     %walk_normal.ogg
     %walk_slowed.ogg
@@ -493,12 +493,13 @@ sound: [
     %reaper_sleeper.ogg     ; Level up
     %elevate.ogg            ; Gain virtue
     %moongate_dos.ogg
-    %enemy_magic_proj.ogg
+    %cannon.rfx
+    %party_struck.rfx
     %fx_tremor.ogg
     %spell_precast_dos.ogg
     %spell_flash_25.ogg
     %fire_field_walking.ogg
-    %fire_field_walking.ogg
+    %cyclone.rfx
     %gate_open.ogg
     %stone_falling.ogg
     %wind_gust.ogg
