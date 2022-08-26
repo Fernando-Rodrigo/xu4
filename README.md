@@ -78,14 +78,17 @@ https://www.gog.com/game/ultima_4.
 
 If you have the optional u4upgrad.zip, place it in the same directory as the
 u4 executable.  xu4 will read the Ultima IV data files straight out of the
-zipfile.
+zipfile.  To use it open the game browser with the Escape key and select
+the `U4-Upgrade` module.
 
 xu4 searches for the zipfiles, or the unpacked contents of the
 zipfiles in the following places:
  - The current directory when xu4 is run
  - A subdirectory named `ultima4` of the current directory
+ - On Linux: `$HOME/.local/share/xu4`
+ - On macOS: `$HOME/Library/Application Support/xu4`
  - On UNIX systems: `/usr/share/xu4` & `/usr/local/share/xu4`
- - On Linux `$HOME/.local/share/xu4` may also be used
+ - On Windows: `%LOCALAPPDATA%\xu4`
 
 The zipfile doesn't need to be unpacked, but if it is, xu4 can handle
 uppercase or lowercase filenames even on case-sensitive filesystems,

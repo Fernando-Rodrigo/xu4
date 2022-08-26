@@ -25,6 +25,7 @@
 
 #include "direction.h"
 #include "types.h"
+#include "txf_draw.h"
 #include "u4file.h"
 
 class Image;
@@ -79,17 +80,25 @@ class TileAnimSet;
 // Expose a few Screen members via this struct.
 struct ScreenState {
     const TileAnimSet* tileanims;
+    const TxfHeader* const* fontTable;
     int currentCycle;
     int vertOffset;
-    bool formatIsABGR;
+    int displayW;       // Full display pixel dimensions.
+    int displayH;
+    int aspectW;        // Aspect-correct pixel dimensions.
+    int aspectH;
+    int aspectX;        // Origin of aspect-correct area on display.
+    int aspectY;
 };
 
 #define SCR_CYCLE_PER_SECOND 4
 
-void screenInit(void);
+void screenInit(int layerCount);
 void screenRefreshTimerInit(void);
 void screenDelete(void);
 void screenReInit(void);
+void screenSetLayer(int layer, void (*renderFunc)(ScreenState*, void*),
+                    void* data);
 void screenSwapBuffers();
 void screenWait(int numberOfAnimationFrames);
 void screenUploadToGPU();
@@ -141,9 +150,9 @@ void screenDetectDungeonTraps();
 void screenSetMouseCursor(MouseCursor cursor);
 void screenShowMouseCursor(bool visible);
 void screenPointToMouseArea(int* x, int* y);
-int  pointInMouseArea(int x, int y, MouseArea *area);
+int  pointInMouseArea(int x, int y, const MouseArea *area);
 
-ScreenState* screenState();
+const ScreenState* screenState();
 
 #define SCR_CYCLE_MAX 16
 

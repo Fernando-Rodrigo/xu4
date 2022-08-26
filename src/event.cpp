@@ -148,9 +148,9 @@ void EventHandler::popKeyHandler() {
     popController();
 }
 
-MouseArea* EventHandler::mouseAreaForPoint(int x, int y) {
+const MouseArea* EventHandler::mouseAreaForPoint(int x, int y) const {
     int i;
-    MouseArea *areas = getMouseAreaSet();
+    const MouseArea *areas = getMouseAreaSet();
 
     if (!areas)
         return NULL;
@@ -561,7 +561,7 @@ void TimedEventMgr::tick() {
         events.remove(*i);
 }
 
-void EventHandler::pushMouseAreaSet(MouseArea *mouseAreas) {
+void EventHandler::pushMouseAreaSet(const MouseArea *mouseAreas) {
     mouseAreaSets.push_front(mouseAreas);
 }
 
@@ -573,7 +573,7 @@ void EventHandler::popMouseAreaSet() {
 /**
  * Get the currently active mouse area set off the top of the stack.
  */
-MouseArea* EventHandler::getMouseAreaSet() const {
+const MouseArea* EventHandler::getMouseAreaSet() const {
     if (mouseAreaSets.size())
         return mouseAreaSets.front();
     else
@@ -653,7 +653,7 @@ bool ReadStringController::keyPressed(int key) {
             value += key;
 
             if (view) {
-                view->textAt(screenX + len, screenY, "%c", key);
+                view->textAtFmt(screenX + len, screenY, "%c", key);
             } else {
                 screenHideCursor();
                 screenTextAt(screenX + len, screenY, "%c", key);
@@ -815,7 +815,9 @@ bool EventHandler::globalKeyHandler(int key) {
 #endif
         xu4.eventHandler->quitGame();
         return true;
-    default: return false;
+
+    default:
+        return false;
     }
 }
 
@@ -823,9 +825,8 @@ bool EventHandler::globalKeyHandler(int key) {
  * A default key handler that should be valid everywhere
  */
 bool KeyHandler::defaultHandler(int key, void *data) {
-    bool valid = true;
-
     switch (key) {
+#ifdef DEBUG
     case '`':
         if (c && c->location) {
             const Location* loc = c->location;
@@ -836,12 +837,17 @@ bool KeyHandler::defaultHandler(int key, void *data) {
                     tile->nameStr());
         }
         break;
-    default:
-        valid = false;
+#endif
+
+    case U4_ESC:
+        xu4_selectGame();
         break;
+
+    default:
+        return false;
     }
 
-    return valid;
+    return true;
 }
 
 /**

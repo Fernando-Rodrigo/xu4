@@ -1,5 +1,5 @@
 options [
-	os_api: 'allegro	"Platform API ('allegro 'sdl)"
+	os_api: 'allegro	"Platform API ('allegro 'glv 'sdl)"
 	use_faun: true
 	sdk_dir: none		"Path to Boron/Faun headers and libraries (UNIX only)"
 	gpu_render: false
@@ -56,6 +56,18 @@ exe %xu4 [
 					%sound_allegro.cpp
 			]
 		]
+		glv [
+			unix [
+				include_from %src/glv/x11
+				libs [%Xcursor %X11]
+				sources/flags [%src/glv/x11/glv.c] "-DUSE_CURSORS"
+			]
+			libs [%faun]
+			sources_from %src [
+				%screen_glv.cpp
+				%sound_faun.cpp
+			]
+		]
 		sdl [
 			include_from %/usr/include/SDL
 			libs [%SDL %SDL_mixer]
@@ -71,7 +83,10 @@ exe %xu4 [
 		cflags "-DUSE_BORON -DCONF_MODULE"
 		unix [
 			libs %boron
-			if sdk_dir [libs %pthread]  ; Needed for static libboron.
+			if sdk_dir [
+					; Needed for static libboron & libfaun.
+					libs [%pthread %pulse-simple %pulse %vorbisfile]
+			]
 		]
 		win32 [
 			libs_from %../usr/lib either msvc %libboron %boron
@@ -128,6 +143,8 @@ exe %xu4 [
 		%event.cpp
 		%filesystem.cpp
 		%game.cpp
+		%gamebrowser.cpp
+		%gui.cpp
 		%image.cpp
 		%imageloader.cpp
 		%imagemgr.cpp
@@ -170,6 +187,8 @@ exe %xu4 [
 		%lzw/u4decode.cpp
 
 		%support/notify.c
+		%support/stringTable.c
+		%support/txf_draw.c
 	]
 ]
 
@@ -184,4 +203,12 @@ if make_util [
 			%src/util/dumpsavegame.cpp
 		]
 	]
+]
+
+; cbuild makes the archive for mingw & allegro so add the Linux files as well.
+dist [
+	%src/screen_glv.cpp
+	%src/glv/x11/glv.c
+	%src/glv/x11/glv.h
+	%src/glv/x11/glv_keys.h
 ]

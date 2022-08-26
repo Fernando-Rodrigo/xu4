@@ -73,6 +73,8 @@ public:
     virtual void finishTurn() = 0;
 };
 
+struct ScreenState;
+
 /**
  * The main game controller that handles basic game flow and keypresses.
  *
@@ -90,6 +92,7 @@ public:
     virtual bool present();
     virtual void conclude();
     virtual bool keyPressed(int key);
+    virtual bool inputEvent(const InputEvent*);
     virtual void timerFired();
 
     /* main game functions */
@@ -110,6 +113,7 @@ public:
 
 private:
     static void gameNotice(int, void*, void*);
+    static void renderHud(ScreenState* ss, void* data);
     void initScreenWithoutReloadingState();
     void initMoons();
 
@@ -123,6 +127,9 @@ private:
     bool checkMoongates();
 
     bool createBalloon(Map *map);
+
+    float* borderAttr;
+    int borderAttrLen;
 };
 
 /* map and screen functions */

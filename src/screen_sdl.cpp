@@ -11,6 +11,7 @@
 #include "image.h"
 #include "settings.h"
 #include "screen.h"
+#include "u4.h"
 #include "xu4.h"
 
 #if defined(MACOSX)
@@ -19,7 +20,6 @@
 #include "cursors.h"
 #endif
 
-extern bool verbose;
 extern unsigned int refresh_callback(unsigned int, void*);
 
 struct ScreenSDL {
@@ -51,7 +51,7 @@ void u4_SDL_QuitSubSystem(Uint32 flags) {
         SDL_QuitSubSystem(flags);
 }
 
-void screenInit_sys(const Settings* settings, int* dim, int reset) {
+void screenInit_sys(const Settings* settings, ScreenState* state, int reset) {
     ScreenSDL* sd;
 
     if (! reset) {
@@ -71,13 +71,14 @@ void screenInit_sys(const Settings* settings, int* dim, int reset) {
 
     SDL_SetGamma(settings->gamma / 100.0f, settings->gamma / 100.0f, settings->gamma / 100.0f);
 
-    dim[2] = 320 * settings->scale;
-    dim[3] = 200 * settings->scale;
+    state->aspectW = U4_SCREEN_W * settings->scale;
+    state->aspectH = U4_SCREEN_H * settings->scale;
 
-    if (!SDL_SetVideoMode(dim[2], dim[3], 32, SDL_HWSURFACE | (settings->fullscreen ? SDL_FULLSCREEN : 0)))
+    if (!SDL_SetVideoMode(state->aspectW, state->aspectH, 32,
+                SDL_HWSURFACE | (settings->fullscreen ? SDL_FULLSCREEN : 0)))
         errorFatal("unable to set video: %s", SDL_GetError());
 
-    if (verbose) {
+    if (xu4.verbose) {
         char driver[32];
         printf("screen initialized [screenInit()], using %s video driver\n", SDL_VideoDriverName(driver, sizeof(driver)));
     }
@@ -97,17 +98,19 @@ void screenInit_sys(const Settings* settings, int* dim, int reset) {
     }
 
     {
-    ScreenState* state = screenState();
     SDL_Surface* ss = SDL_GetVideoSurface();
 
-    dim[0] = ss->w;
-    dim[1] = ss->h;
+    state->displayW = ss->w;
+    state->displayH = ss->h;
+    state->aspectX  = (state->displayW - state->aspectW) / 2;
+    state->aspectY  = (state->displayH - state->aspectH) / 2;
 
 #if 0
     printf( "SDL color masks: R:%08x G:%08x B:%08x A:%08x\n",
             ss->format->Rmask, ss->format->Gmask,
             ss->format->Bmask, ss->format->Amask );
 #endif
+#if 0
     switch (ss->format->Rmask) {
         default:
             errorWarning("Unsupported SDL pixel format: %d:%08x",
@@ -120,6 +123,7 @@ void screenInit_sys(const Settings* settings, int* dim, int reset) {
             state->formatIsABGR = true;
             break;
     }
+#endif
     }
 
     sd->frameDuration = 1000 / settings->screenAnimationFramesPerSecond;

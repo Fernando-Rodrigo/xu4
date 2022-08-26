@@ -210,13 +210,12 @@ IntroController::IntroController() :
     videoMenu.setClosesMenu(CANCEL);
 
     gfxMenu.setTitle("Game Graphics Options", 0,0);
-    gfxMenu.add(MI_GFX_SCHEME,                        new StringMenuItem("Graphics Scheme    %s", 2,  2,/*'G'*/ 0, &settingsChanged.videoType, xu4.config->schemeNames()));
-    gfxMenu.add(MI_GFX_TILE_TRANSPARENCY,               new BoolMenuItem("Transparency Hack  %s", 2,  4,/*'t'*/ 0, &settingsChanged.enhancementsOptions.u4TileTransparencyHack));
-    gfxMenu.add(MI_GFX_TILE_TRANSPARENCY_SHADOW_SIZE,    new IntMenuItem("  Shadow Size:     %d", 2,  5,/*'s'*/ 9, &settingsChanged.enhancementsOptions.u4TrileTransparencyHackShadowBreadth, 0, 16, 1));
-    gfxMenu.add(MI_GFX_TILE_TRANSPARENCY_SHADOW_OPACITY, new IntMenuItem("  Shadow Opacity:  %d", 2,  6,/*'o'*/ 9, &settingsChanged.enhancementsOptions.u4TileTransparencyHackPixelShadowOpacity, 8, 256, 8));
-    gfxMenu.add(MI_VIDEO_02,                          new StringMenuItem("Gem Layout         %s", 2,  8,/*'e'*/ 1, &settingsChanged.gemLayout, screenGetGemLayoutNames()));
-    gfxMenu.add(MI_VIDEO_03,                            new EnumMenuItem("Line Of Sight      %s", 2,  9,/*'l'*/ 0, &settingsChanged.lineOfSight, screenGetLineOfSightStyles()));
-    gfxMenu.add(MI_VIDEO_07,                            new BoolMenuItem("Screen Shaking     %s", 2, 10,/*'k'*/ 8, &settingsChanged.screenShakes));
+    gfxMenu.add(MI_GFX_TILE_TRANSPARENCY,               new BoolMenuItem("Transparency Hack  %s", 2,  2,/*'t'*/ 0, &settingsChanged.enhancementsOptions.u4TileTransparencyHack));
+    gfxMenu.add(MI_GFX_TILE_TRANSPARENCY_SHADOW_SIZE,    new IntMenuItem("  Shadow Size:     %d", 2,  3,/*'s'*/ 9, &settingsChanged.enhancementsOptions.u4TrileTransparencyHackShadowBreadth, 0, 16, 1));
+    gfxMenu.add(MI_GFX_TILE_TRANSPARENCY_SHADOW_OPACITY, new IntMenuItem("  Shadow Opacity:  %d", 2,  4,/*'o'*/ 9, &settingsChanged.enhancementsOptions.u4TileTransparencyHackPixelShadowOpacity, 8, 256, 8));
+    gfxMenu.add(MI_VIDEO_02,                          new StringMenuItem("Gem Layout         %s", 2,  6,/*'e'*/ 1, &settingsChanged.gemLayout, screenGetGemLayoutNames()));
+    gfxMenu.add(MI_VIDEO_03,                            new EnumMenuItem("Line Of Sight      %s", 2,  7,/*'l'*/ 0, &settingsChanged.lineOfSight, screenGetLineOfSightStyles()));
+    gfxMenu.add(MI_VIDEO_07,                            new BoolMenuItem("Screen Shaking     %s", 2,  8,/*'k'*/ 8, &settingsChanged.screenShakes));
     gfxMenu.add(MI_GFX_RETURN,               "\010 Return to Video Options",              2,  12,/*'r'*/  2);
     gfxMenu.setClosesMenu(MI_GFX_RETURN);
 
@@ -495,6 +494,24 @@ bool IntroController::keyPressed(int key) {
     return valid || KeyHandler::defaultHandler(key, NULL);
 }
 
+bool IntroController::inputEvent(const InputEvent* ev) {
+    if (mode == INTRO_MENU &&
+        ev->type == CIE_MOUSE_PRESS && ev->n == CMOUSE_LEFT)
+    {
+        int cx, cy;
+        menuArea.mouseTextPos(ev->x, ev->y, cx, cy);
+
+        // Matches text position in updateScreen().
+        if (cx >= 10 && cx <= 28) {
+            if (cy >= 5 && cy <= 9) {
+                static const char menuKey[] = "rjica";
+                keyPressed( menuKey[cy - 5] );
+            }
+        }
+    }
+    return true;
+}
+
 /**
  * Draws the small map on the intro screen.
  */
@@ -671,7 +688,7 @@ void IntroController::animateTree(Symbol frame) {
         return;
 
     // Hack to account for different tree images.
-    if (xu4.settings->videoType == "EGA") {
+    if (xu4.settings->videoType == GFX_EGA) {
         x = 72;
         ytop = 68;
     } else {
@@ -738,7 +755,7 @@ void IntroController::drawAbacusBeads(int row, int selectedVirtue, int rejectedV
     ASSERT(rejectedVirtue < 8 && rejectedVirtue >= 0, "invalid virtue: %d", rejectedVirtue);
 
     const uint8_t* pos = positionTable;
-    if (xu4.settings->videoType == "VGA")
+    if (xu4.settings->videoType == GFX_VGA)
         pos += 4;
     int y = pos[2] + (row * pos[3]);
     backgroundArea.draw(IMG_WHITEBEAD, pos[0] + (selectedVirtue * pos[1]), y);
@@ -788,11 +805,11 @@ void IntroController::updateScreen() {
 
         menuArea.textAt(1,  1, "In another world, in a time to come.");
         menuArea.textAt(14, 3, "Options:");
-        menuArea.textAt(10, 5, "%s", menuArea.colorizeString("Return to the view", FG_YELLOW, 0, 1).c_str());
-        menuArea.textAt(10, 6, "%s", menuArea.colorizeString("Journey Onward",     FG_YELLOW, 0, 1).c_str());
-        menuArea.textAt(10, 7, "%s", menuArea.colorizeString("Initiate New Game",  FG_YELLOW, 0, 1).c_str());
-        menuArea.textAt(10, 8, "%s", menuArea.colorizeString("Configure",          FG_YELLOW, 0, 1).c_str());
-        menuArea.textAt(10, 9, "%s", menuArea.colorizeString("About",              FG_YELLOW, 0, 1).c_str());
+        menuArea.textAtKey(10, 5, "Return to the view", 0);
+        menuArea.textAtKey(10, 6, "Journey Onward", 0);
+        menuArea.textAtKey(10, 7, "Initiate New Game", 0);
+        menuArea.textAtKey(10, 8, "Configure", 0);
+        menuArea.textAtKey(10, 9, "About", 0);
         drawBeasties();
 
         // draw the cursor last
@@ -932,6 +949,7 @@ void IntroController::finishInitiateGame(const string &nameBuffer, SexType sex)
 
     // show the text thats segues into the main game
     showText(binData->introGypsy[GYP_SEGUE1]);
+    soundSpeakLine(VOICE_GYPSY, 4);
 #ifdef IOS
     U4IOS::switchU4IntroControllerToContinueButton();
 #endif
@@ -973,12 +991,24 @@ void IntroController::showStory() {
 
         showText(binData->introText[storyInd]);
 
-        if (storyInd == 3) {
-            questionArea.disableCursor();
-            animateTree(IMG_MOONGATE);
-        } else if (storyInd == 5) {
-            questionArea.disableCursor();
-            animateTree(IMG_ITEMS);
+        switch (storyInd) {
+            case 3:
+                questionArea.disableCursor();
+                animateTree(IMG_MOONGATE);
+                break;
+            case 5:
+                questionArea.disableCursor();
+                animateTree(IMG_ITEMS);
+                break;
+            case 20:
+                soundSpeakLine(VOICE_GYPSY, 0);
+                break;
+            case 22:
+                soundSpeakLine(VOICE_GYPSY, 1);
+                break;
+            case 23:
+                soundSpeakLine(VOICE_GYPSY, 2);
+                break;
         }
 
         // enable the cursor here to avoid drawing in undesirable locations
@@ -1000,7 +1030,7 @@ void IntroController::startQuestions() {
     };
     ReadChoiceController questionController("ab");
     uint8_t* origin = originTable;
-    if (xu4.settings->videoType == "VGA")
+    if (xu4.settings->videoType == GFX_VGA)
         origin += 3;
 
     questionRound = 0;
@@ -1030,12 +1060,13 @@ void IntroController::startQuestions() {
         EventHandler::wait_msecs(1000);
 
         const string& virtue1 = gypsyText[questionTree[i1] + 4];
-        questionArea.textAt(0, 2, "%s and", virtue1.c_str());
+        questionArea.textAtFmt(0, 2, "%s and", virtue1.c_str());
         drawCard(0, questionTree[i1], origin);
         EventHandler::wait_msecs(1000);
 
-        questionArea.textAt(virtue1.size() + 4, 2, " %s.  She says",
-                            gypsyText[questionTree[i2] + 4].c_str());
+        soundSpeakLine(VOICE_GYPSY, 3);
+        questionArea.textAtFmt(virtue1.size() + 4, 2, " %s.  She says",
+                               gypsyText[questionTree[i2] + 4].c_str());
         drawCard(1, questionTree[i2], origin);
         questionArea.textAt(0, 3, "\"Consider this:\"");
         questionArea.enableCursor();
@@ -1106,7 +1137,7 @@ void IntroController::about() {
     backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 120);
 
     screenHideCursor();
-    menuArea.textAt(14, 1, "XU4 %s", VERSION);
+    menuArea.textAtFmt(14, 1, "XU4 %s", VERSION);
     menuArea.textAt(1, 3, "xu4 is free software; you can redist-");
     menuArea.textAt(1, 4, "ribute it and/or modify it under the");
     menuArea.textAt(1, 5, "terms of the GNU GPL as published by");
@@ -1132,13 +1163,13 @@ void IntroController::showText(const string &text) {
 
     unsigned long pos = current.find("\n");
     while (pos < current.length()) {
-        questionArea.textAt(0, lineNo++, "%s", current.substr(0, pos).c_str());
+        questionArea.textAt(0, lineNo++, current.substr(0, pos).c_str());
         current = current.substr(pos+1);
         pos = current.find("\n");
     }
 
     /* write the last line (possibly only line) */
-    questionArea.textAt(0, lineNo++, "%s", current.substr(0, pos).c_str());
+    questionArea.textAt(0, lineNo++, current.substr(0, pos).c_str());
 }
 
 /**
@@ -1771,7 +1802,7 @@ void IntroController::getTitleSourceData()
                     x = srcData[titles[i].animStepMax] - 0x4C;
                     y = 0xC0 - srcData[titles[i].animStepMax+1];
 
-                    if (xu4.settings->videoType != "EGA")
+                    if (xu4.settings->videoType != GFX_EGA)
                     {
                         // yellow gradient
                         color = info->image->setColor(255, (y == 2 ? 250 : 255), blue[y-1]);
@@ -2064,7 +2095,7 @@ bool IntroController::updateTitle()
             if (step >= mapArea.columns)
                 mapArea.scissor = NULL;
             else {
-                int scale = xu4.settings->scale;
+                int scale = screenState()->aspectH / U4_SCREEN_H;
                 mapScissor[0] = scale * (160 - step * 8);   // Left
                 mapScissor[1] = mapArea.screenRect[1];      // Bottom
                 mapScissor[2] = scale * (step * 2 * 8);     // Width

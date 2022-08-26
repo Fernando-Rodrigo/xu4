@@ -13,6 +13,8 @@
 #include "death.h"
 #include "debug.h"
 #include "error.h"
+#include "image32.h"
+#include "gpu.h"
 #include "intro.h"
 #include "item.h"
 #include "imagemgr.h"
@@ -66,12 +68,12 @@ static void gameCreatureAttack(Creature *obj);
 
 Context *c = NULL;
 
-MouseArea mouseAreas[] = {
-    { 3, { { 8, 8 }, { 8, 184 }, { 96, 96 } }, MC_WEST, { U4_ENTER, 0, U4_LEFT } },
-    { 3, { { 8, 8 }, { 184, 8 }, { 96, 96 } }, MC_NORTH, { U4_ENTER, 0, U4_UP }  },
-    { 3, { { 184, 8 }, { 184, 184 }, { 96, 96 } }, MC_EAST, { U4_ENTER, 0, U4_RIGHT } },
-    { 3, { { 8, 184 }, { 184, 184 }, { 96, 96 } }, MC_SOUTH, { U4_ENTER, 0, U4_DOWN } },
-    { 0, {{0,0}, {0,0}, {0,0}}, MC_DEFAULT, {0,0} }
+static const MouseArea mouseAreas[] = {
+    {3, {{  8,  8}, {  8, 184}, {96, 96}}, MC_WEST,  {U4_ENTER, 0, U4_LEFT}},
+    {3, {{  8,  8}, {184,   8}, {96, 96}}, MC_NORTH, {U4_ENTER, 0, U4_UP}},
+    {3, {{184,  8}, {184, 184}, {96, 96}}, MC_EAST,  {U4_ENTER, 0, U4_RIGHT}},
+    {3, {{  8,184}, {184, 184}, {96, 96}}, MC_SOUTH, {U4_ENTER, 0, U4_DOWN}},
+    {0, {{0,0}, {0,0}, {0,0}}, MC_DEFAULT, {0,0}}
 };
 
 ReadPlayerController::ReadPlayerController() : ReadChoiceController("12345678 \033\n") {
@@ -137,7 +139,9 @@ int AlphaActionController::get(char lastValidLetter, const string &prompt, Event
 
 GameController::GameController() : TurnController(1),
     mapArea(BORDER_WIDTH, BORDER_HEIGHT, VIEWPORT_W, VIEWPORT_H),
-    cutScene(false)
+    cutScene(false),
+    borderAttr(NULL),
+    borderAttrLen(0)
 {
     gs_listen(1<<SENDER_LOCATION | 1<<SENDER_PARTY, gameNotice, this);
 
@@ -151,6 +155,8 @@ GameController::GameController() : TurnController(1),
 GameController::~GameController() {
     discourse_free(&vendorDisc);
     discourse_free(&castleDisc);
+
+    free(borderAttr);
 
     delete c;
     c = NULL;
@@ -169,15 +175,38 @@ bool GameController::present() {
 }
 
 void GameController::conclude() {
+    if (borderAttr)
+        screenSetLayer(LAYER_HUD, NULL, NULL);
     mapArea.clear();
     xu4.eventHandler->popMouseAreaSet();
     screenSetMouseCursor(MC_DEFAULT);
 }
 
+void GameController::renderHud(ScreenState* ss, void* data)
+{
+    //GameController* gc = (GameController*) data;
+
+    gpu_drawGui(xu4.gpu, GPU_DLIST_HUD);
+}
+
 void GameController::initScreenWithoutReloadingState()
 {
     musicPlayLocale();
-    xu4.imageMgr->get(BKGD_BORDERS)->image->draw(0, 0);
+
+    borderAttr = xu4.config->newDrawList(BKGD_BORDERS, &borderAttrLen);
+    if (borderAttr) {
+        float* attr = gpu_beginTris(xu4.gpu, GPU_DLIST_HUD);
+        if (attr) {
+            memcpy(attr, borderAttr, borderAttrLen * sizeof(float));
+            gpu_endTris(xu4.gpu, GPU_DLIST_HUD, attr + borderAttrLen);
+        }
+
+        screenSetLayer(LAYER_HUD, renderHud, this);
+    } else {
+        ImageInfo* info = xu4.imageMgr->get(BKGD_BORDERS);
+        info->image->draw(0, 0);
+    }
+
     c->stats->update(); /* draw the party stats */
 
     screenEnableCursor();
@@ -723,7 +752,7 @@ void GameController::gameNotice(int sender, void* eventData, void* user) {
 
         case PartyEvent::ADVANCED_LEVEL:
             screenMessage("\n%c%s\nThou art now Level %d%c\n", FG_YELLOW,
-                    ev->player->getName().c_str(),
+                    ev->player->getName(),
                     ev->player->getRealLevel(), FG_WHITE);
             gameSpellEffect('r', -1, SOUND_MAGIC); // Same as resurrect spell
             break;
@@ -1443,6 +1472,30 @@ bool GameController::keyPressed(int key) {
     return valid || KeyHandler::defaultHandler(key, NULL);
 }
 
+bool GameController::inputEvent(const InputEvent* ev) {
+    const MouseArea* area;
+
+    if (! xu4.settings->mouseOptions.enabled)
+        return false;
+
+    switch (ev->type) {
+        case CIE_MOUSE_MOVE:
+            area = xu4.eventHandler->mouseAreaForPoint(ev->x, ev->y);
+            screenSetMouseCursor(area ? area->cursor : MC_DEFAULT);
+            break;
+
+        case CIE_MOUSE_PRESS:
+            area = xu4.eventHandler->mouseAreaForPoint(ev->x, ev->y);
+            if (area && ev->n < 4) {
+                int keyCmd = area->command[ev->n - 1];
+                if (keyCmd)
+                    keyPressed(keyCmd);
+            }
+            break;
+    }
+    return true;
+}
+
 string gameGetInput(int maxlen) {
     screenEnableCursor();
     screenShowCursor();
@@ -1619,7 +1672,7 @@ static bool destroyAt(const Coords &coords) {
     if (obj) {
         if (isCreature(obj)) {
             Creature *c = dynamic_cast<Creature*>(obj);
-            screenMessage("%s Destroyed!\n", c->getName().c_str());
+            screenMessage("%s Destroyed!\n", c->getName());
         }
         else {
             const Tile* tile = obj->tile.getTileType();
@@ -2508,7 +2561,7 @@ void readyWeapon(int player) {
     // get the weapon to use
     c->stats->setView(STATS_WEAPONS);
     screenMessage("Weapon: ");
-    WeaponType weapon = (WeaponType) AlphaActionController::get(WEAP_MAX + 'a' - 1, "Weapon: ");
+    int weapon = AlphaActionController::get(WEAP_MAX + 'a' - 1, "Weapon: ");
     c->stats->setView(STATS_PARTY_OVERVIEW);
     if (weapon == -1)
         return;
@@ -2714,7 +2767,7 @@ static void newOrder() {
         return;
 
     if (player1 == 0) {
-        screenMessage("%s, You must lead!\n", c->party->member(0)->getName().c_str());
+        screenMessage("%s, You must lead!\n", c->party->member(0)->getName());
         return;
     }
 
@@ -2726,7 +2779,7 @@ static void newOrder() {
         return;
 
     if (player2 == 0) {
-        screenMessage("%s, You must lead!\n", c->party->member(0)->getName().c_str());
+        screenMessage("%s, You must lead!\n", c->party->member(0)->getName());
         return;
     }
 
@@ -2856,7 +2909,7 @@ static void wearArmor(int player) {
 
     c->stats->setView(STATS_ARMOR);
     screenMessage("Armour: ");
-    ArmorType armor = (ArmorType) AlphaActionController::get(ARMR_MAX + 'a' - 1, "Armour: ");
+    int armor = AlphaActionController::get(ARMR_MAX + 'a' - 1, "Armour: ");
     c->stats->setView(STATS_PARTY_OVERVIEW);
     if (armor == -1)
         return;
@@ -3104,7 +3157,7 @@ static void gameFixupObjects(Map *map, const SaveGameMonsterRecord* table) {
 static void gameCreatureAttack(Creature *m) {
     const Tile *ground;
 
-    screenMessage("\nAttacked by %s\n", m->getName().c_str());
+    screenMessage("\nAttacked by %s\n", m->getName());
 
     ground = battleGround(c->location->map, c->location->coords);
 
@@ -3276,7 +3329,7 @@ void gameSetActivePlayer(int player) {
     }
     else if (player < party->size()) {
         screenMessage("Set Active Player: %s!\n",
-                      party->member(player)->getName().c_str());
+                      party->member(player)->getName());
         if (party->member(player)->isDisabled())
             screenMessage("Disabled!\n");
         else

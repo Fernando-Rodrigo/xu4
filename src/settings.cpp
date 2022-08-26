@@ -12,7 +12,9 @@
 #include "screen.h"
 #include "xu4.h"
 
-#if defined(_WIN32) || defined(__CYGWIN__)
+#ifdef ANDROID
+extern "C" const char* androidInternalData();
+#elif defined(_WIN32) || defined(__CYGWIN__)
 #include <windows.h>
 #include <shlobj.h>
 #elif defined(MACOSX)
@@ -38,11 +40,7 @@ bool SettingsData::operator==(const SettingsData &s) const {
 
     if (gemLayout != s.gemLayout)
         return false;
-    if (videoType != s.videoType)
-        return false;
     if (logging != s.logging)
-        return false;
-    if (game != s.game)
         return false;
 
     return true;
@@ -68,7 +66,10 @@ void Settings::init(const char* profileName) {
     } else {
         profile.clear();
 
-#if defined(MACOSX)
+#if defined(ANDROID)
+        userPath = androidInternalData();
+        userPath += '/';
+#elif defined(MACOSX)
             FSRef folder;
             OSErr err = FSFindFolder(kUserDomain, kApplicationSupportFolderType, kCreateFolder, &folder);
             if (err == noErr) {
@@ -123,7 +124,10 @@ void Settings::init(const char* profileName) {
 #endif
 
     }
+
+#ifndef ANDROID
     FileSystem::createDirectory(userPath);
+#endif
 
     filename = userPath + SETTINGS_BASE_FILENAME;
 
@@ -133,6 +137,20 @@ void Settings::init(const char* profileName) {
 void Settings::setData(const SettingsData &data) {
     // bitwise copy is safe
     *(SettingsData *)this = data;
+}
+
+static void setStringZ(char* dst, const char* src, size_t bufSize) {
+    size_t len = strlen(src);
+    memcpy(dst, src, len);
+    memset(dst + len, 0, bufSize - len);
+}
+
+void Settings::setGame(const char* modName) {
+    setStringZ(game, modName, sizeof(game));
+}
+
+void Settings::setSoundtrack(const char* modName) {
+    setStringZ(soundtrack, modName, sizeof(soundtrack));
 }
 
 /*
@@ -202,7 +220,6 @@ bool Settings::read() {
     scale                 = DEFAULT_SCALE;
     fullscreen            = DEFAULT_FULLSCREEN;
     filter                = DEFAULT_FILTER;
-    videoType             = DEFAULT_VIDEO_TYPE;
     gemLayout             = DEFAULT_GEM_LAYOUT;
     lineOfSight           = DEFAULT_LINEOFSIGHT;
     screenShakes          = DEFAULT_SCREEN_SHAKES;
@@ -255,7 +272,11 @@ bool Settings::read() {
     mouseOptions.enabled = 1;
 
     logging = DEFAULT_LOGGING;
-    game = "Ultima-IV";
+    setGame("Ultima-IV");
+    setSoundtrack("");
+
+    if (xu4.verbose)
+        printf("Reading settings %s\n", filename.c_str());
 
     settingsFile = fopen(filename.c_str(), "rt");
     if (!settingsFile)
@@ -279,7 +300,7 @@ bool Settings::read() {
         else if (VALUE("lineOfSight="))
             lineOfSight = settingEnum(screenGetLineOfSightStyles(), val);
         else if (VALUE("video="))
-            videoType = val;
+            ;                               // Removed in v1.1.
         else if (VALUE("gemLayout="))
             gemLayout = val;
         else if (VALUE("screenShakes="))
@@ -359,7 +380,9 @@ bool Settings::read() {
         else if (VALUE("logging="))
             logging = val;
         else if (VALUE("game="))
-            game = val;
+            setGame(val);
+        else if (VALUE("soundtrack="))
+            setSoundtrack(val);
 
         /* graphics enhancements options */
         else if (VALUE("renderTileTransparency="))
@@ -393,7 +416,6 @@ bool Settings::write() {
             "scale=%d\n"
             "fullscreen=%d\n"
             "filter=%s\n"
-            "video=%s\n"
             "gemLayout=%s\n"
             "lineOfSight=%s\n"
             "screenShakes=%d\n"
@@ -420,7 +442,6 @@ bool Settings::write() {
             scale,
             fullscreen,
             screenGetFilterNames()[ filter ],
-            videoType.c_str(),
             gemLayout.c_str(),
             screenGetLineOfSightStyles()[ lineOfSight ],
             screenShakes,
@@ -462,6 +483,7 @@ bool Settings::write() {
             "mouseEnabled=%d\n"
             "logging=%s\n"
             "game=%s\n"
+            "soundtrack=%s\n"
             "renderTileTransparency=%d\n"
             "transparentTilePixelShadowOpacity=%d\n"
             "transparentTileShadowSize=%d\n",
@@ -479,7 +501,8 @@ bool Settings::write() {
             campingAlwaysCombat,
             mouseOptions.enabled,
             logging.c_str(),
-            game.c_str(),
+            game,
+            soundtrack,
             enhancementsOptions.u4TileTransparencyHack,
             enhancementsOptions.u4TileTransparencyHackPixelShadowOpacity,
             enhancementsOptions.u4TrileTransparencyHackShadowBreadth);

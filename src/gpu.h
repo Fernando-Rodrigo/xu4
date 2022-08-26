@@ -1,5 +1,12 @@
 #include <stdint.h>
 
+enum GpuDrawList {
+    GPU_DLIST_GUI,
+    GPU_DLIST_HUD,
+    GPU_DLIST_VIEW_OBJ,
+    GPU_DLIST_VIEW_FX
+};
+
 struct BlockingGroups;
 class Map;
 class TileView;
@@ -20,8 +27,9 @@ float*   gpu_beginTris(void* res, int list);
 void     gpu_endTris(void* res, int list, float* attr);
 void     gpu_clearTris(void* res, int list);
 void     gpu_drawTris(void* res, int list);
+void     gpu_drawGui(void* res, int list);
+void     gpu_guiClutUV(void* res, float* uv, float colorIndex);
 float*   gpu_emitQuad(float* attr, const float* drawRect, const float* uvRect);
-//void     gpu_render(void* res, const Image* screen);
 void     gpu_resetMap(void* res, const Map* map);
 void     gpu_drawMap(void* res, const TileView* view, const float* tileUVs,
                      const BlockingGroups* blocks,

@@ -8,8 +8,10 @@
 #include "debug.h"
 #include "event.h"
 #include "imagemgr.h"
+#include "screen.h"
 #include "settings.h"
 #include "textview.h"
+#include "u4.h"
 #include "xu4.h"
 
 Image *TextView::charset = NULL;
@@ -117,10 +119,10 @@ void TextView::textSelectedAt(int x, int y, const char *text) {
         colorBG = FONT_COLOR_INDEX(BG_BRIGHT);
         for (int i=0; i < columns-1; i++)
             textAt(x-1+i, y, " ");
-        textAt(x, y, "%s", text);
+        textAt(x, y, text);
         colorBG = FONT_COLOR_INDEX(BG_NORMAL);
     } else {
-        textAt(x, y, "%s", text);
+        textAt(x, y, text);
     }
 }
 
@@ -146,58 +148,37 @@ string TextView::colorizeStatus(char statustype) {
 }
 
 /* depending on the status type, apply colorization to the character */
-string TextView::colorizeString(string input, TextColor color, unsigned int colorstart, unsigned int colorlength) {
-    if (!xu4.settings->enhancements ||
-        !xu4.settings->enhancementsOptions.textColorization)
-        return input;
+string TextView::highlightKey(const string& input, unsigned int keyIndex) {
+    if (xu4.settings->enhancements &&
+        xu4.settings->enhancementsOptions.textColorization) {
+        string output;
+        string::size_type length = input.length();
+        string::size_type i;
 
-    string output = "";
-    string::size_type length = input.length();
-    string::size_type i;
-    bool colorization = false;
-
-    // loop through the entire string and
-    for (i = 0; i < length; i++) {
-        if (i == colorstart) {
-            output += color;
-            colorization = true;
-        }
-        output += input[i];
-        if (colorization) {
-           colorlength--;
-            if (colorlength == 0) {
+        for (i = 0; i < length; i++) {
+            if (i == keyIndex) {
+                output += FG_YELLOW;
+                output += input[i];
                 output += FG_WHITE;
-                colorization = false;
-            }
+            } else
+                output += input[i];
         }
+
+        return output;
     }
-
-    // if we reached the end of the string without
-    // resetting the color to white, do it now
-    if (colorization)
-        output += FG_WHITE;
-
-    return output;
+    return input;
 }
 
-void TextView::textAt(int x, int y, const char *fmt, ...) {
-    char buffer[1024];
-    unsigned int i;
-    unsigned int offset = 0;
-
+void TextView::textAt(int x, int y, const char *text) {
     bool reenableCursor = false;
     if (cursorFollowsText && cursorEnabled) {
         disableCursor();
         reenableCursor = true;
     }
 
-    va_list args;
-    va_start(args, fmt);
-    vsnprintf(buffer, sizeof(buffer), fmt, args);
-    va_end(args);
-
-    for (i = 0; i < strlen(buffer); i++) {
-        switch (buffer[i]) {
+    int ch;
+    while ((ch = *text++)) {
+        switch (ch) {
             case FG_GREY:
             case FG_BLUE:
             case FG_PURPLE:
@@ -205,18 +186,38 @@ void TextView::textAt(int x, int y, const char *fmt, ...) {
             case FG_RED:
             case FG_YELLOW:
             case FG_WHITE:
-                colorFG = FONT_COLOR_INDEX(buffer[i]);
-                offset++;
+                colorFG = FONT_COLOR_INDEX(ch);
                 break;
+
             default:
-                drawChar(buffer[i], x+(i-offset), y);
+                drawChar(ch, x++, y);
+                break;
         }
     }
 
     if (cursorFollowsText)
-        setCursorPos(x + i, y, true);
+        setCursorPos(x, y, true);
     if (reenableCursor)
         enableCursor();
+}
+
+void TextView::textAtFmt(int x, int y, const char *fmt, ...) {
+    char buffer[512];
+    va_list args;
+
+    va_start(args, fmt);
+    vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+
+    textAt(x, y, buffer);
+}
+
+/*
+ * Draw text with a single character highlighted.
+ */
+void TextView::textAtKey(int x, int y, const char *text, int keyIndex) {
+    string ctext = highlightKey(text, keyIndex);
+    textAt(x, y, ctext.c_str());
 }
 
 void TextView::scroll() {
@@ -248,6 +249,16 @@ void TextView::setCursorPos(int x, int y, bool clearOld) {
     cursorY = y;
 
     drawCursor();
+}
+
+/*
+ * Translate InputEvent mouse position to view character coordinates.
+ */
+void TextView::mouseTextPos(int mouseX, int mouseY, int& cx, int& cy) {
+    const ScreenState* ss = screenState();
+    int scale = ss->aspectH / U4_SCREEN_H;
+    cx = (((mouseX - ss->aspectX) / scale) - x) / CHAR_WIDTH;
+    cy = (((mouseY - ss->aspectY) / scale) - y) / CHAR_HEIGHT;
 }
 
 void TextView::enableCursor() {

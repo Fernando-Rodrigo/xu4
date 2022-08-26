@@ -7,6 +7,8 @@ CSRCS=\
         lzw/hash.c \
         lzw/lzw.c \
         support/notify.c \
+        support/stringTable.c \
+        support/txf_draw.c \
         unzip.c \
         $(NULL)
 
@@ -32,6 +34,8 @@ CXXSRCS=\
         event_$(UI).cpp \
         filesystem.cpp \
         game.cpp \
+        gamebrowser.cpp \
+        gui.cpp \
         image.cpp \
         imageloader.cpp \
         imagemgr.cpp \

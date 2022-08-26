@@ -39,6 +39,8 @@ enum ConfigValues
     CI_WEAPONS,
     CI_CREATURES,
     CI_GRAPHICS,
+    CI_DRAW_LISTS,
+    CI_TILEANIM,
     CI_LAYOUTS,
     CI_MAPS,
     CI_TILE_RULES,
@@ -93,7 +95,6 @@ struct ConfigData
 {
     vector<const char*> sarray;   // Temp. buffer for const char** values.
     vector<Layout> layouts;
-    vector<string> schemeNames;
     Armor* armors;
     vector<Weapon*> weapons;
     vector<Creature *> creatures;
@@ -112,7 +113,7 @@ struct ConfigData
 };
 
 struct ConfigBoron : public Config {
-    ConfigBoron(const char* renderPath, const char* modulePath);
+    ConfigBoron(const char* renderPath, const char* modulePath, const char*);
     ~ConfigBoron();
     const UBuffer* buffer(int value, int dataType) const;
     const UBuffer* blockIt(UBlockIt* bi, int value) const;
@@ -122,6 +123,7 @@ struct ConfigBoron : public Config {
     Module mod;
     UIndex configN;
     UIndex itemIdN;         // item-id context!
+    UIndex musicN;          // music parts block!
     size_t tocUsed;
     ConfigData xcd;
     UBuffer evalBuf;
@@ -850,6 +852,75 @@ const void* Config::scriptEvalArg(const char* fmt, ...)
 
 //--------------------------------------
 
+static void mergeGraphics(ConfigBoron* cfg, const UCell* rep)
+{
+    UBlockIt dest;
+    UBlockIt src;
+    UBuffer* destBlk;
+    UCell* d2;
+    UAtom name;
+    const int paramLen = 5;
+
+    // See imageParam (below) for expected values.
+
+    destBlk = (UBuffer*) cfg->blockIt(&dest, CI_GRAPHICS);
+    if (destBlk && ur_is(rep, UT_BLOCK)) {
+        ur_blockIt(cfg->ut, &src, rep);
+        for ( ; src.it != src.end; src.it += paramLen) {
+            if (! ur_is(src.it, UT_WORD))
+                continue;
+
+            name = ur_atom(src.it);
+            d2 = (UCell*) dest.it;
+            for ( ; d2 != dest.end; d2 += paramLen) {
+                if (ur_atom(d2) == name)
+                    break;
+            }
+            if (d2 == dest.end) {
+                // Name not found - append new entry.
+                ur_blkAppendCells(destBlk, src.it, paramLen);
+
+                // Reacquire pointers.
+                dest.it  = destBlk->ptr.cell;
+                dest.end = dest.it + destBlk->used;
+            } else {
+                // Name found - overwrite existing entry.
+                memcpy(d2, src.it, sizeof(UCell) * paramLen);
+            }
+        }
+    }
+}
+
+static void mergeMusic(ConfigBoron* cfg, const UCell* rep)
+{
+    if (! ur_is(rep, UT_BLOCK))
+        return;
+
+    UThread* ut = cfg->ut;
+    UBuffer* buf = ur_buffer(cfg->configN);
+    UCell* cell = ur_ctxCell(buf, CI_MUSIC);
+    if (ur_is(cell, UT_BLOCK)) {
+        // Overwrite any existing music part values.
+        buf = ur_bufferSerM(cell);
+        if (buf) {
+            int existing = buf->used;
+            const UBuffer* repBlk = ur_bufferSeries(ut, rep);
+            if (repBlk->used > existing)
+                ur_blkAppendCells(buf, repBlk->ptr.cell + existing,
+                                  repBlk->used - existing);
+            cell = repBlk->ptr.cell;
+            for (int i = 0; i < existing; ++cell, ++i) {
+                if (! ur_is(cell, UT_NONE))
+                    buf->ptr.cell[i] = *cell;
+            }
+        }
+    } else {
+        // No existing music block! so use replacement as-is.
+        *cell = *rep;
+        cfg->musicN = rep->series.buf;
+    }
+}
+
 // Load and merge config.
 static const char* confLoader(FILE* fp, const CDIEntry* ent, void* user)
 {
@@ -867,17 +938,25 @@ static const char* confLoader(FILE* fp, const CDIEntry* ent, void* user)
             if (cfg->configN == UR_INVALID_BUF) {
                 cfg->configN = res->series.buf;
                 ur_hold(cfg->configN);  // Keep forever.
+
+                const UCell* cell =
+                    ur_ctxCell(ur_buffer(cfg->configN), CI_MUSIC);
+                if (ur_is(cell, UT_BLOCK))
+                    cfg->musicN = cell->series.buf;
             } else {
                 UBuffer* cur = ur_buffer(cfg->configN);
                 UBuffer* ctx = ur_buffer(res->series.buf);
                 int i;
 
-                // Replace existing config context values (except for music).
+                // Replace existing config context values.
                 for (i = 0; i < CI_COUNT; ++i) {
-                    if (i == CI_MUSIC)
-                        continue;
                     res = ur_ctxCell(ctx, i);
-                    if (! ur_is(res, UT_NONE)) {
+
+                    if (i == CI_GRAPHICS)
+                        mergeGraphics(cfg, res);
+                    else if (i == CI_MUSIC)
+                        mergeMusic(cfg, res);
+                    else if (! ur_is(res, UT_NONE)) {
                         cur->ptr.cell[i] = *res;
                         //printf("KR config overlay %d\n", i);
                     }
@@ -892,7 +971,8 @@ static const char* confLoader(FILE* fp, const CDIEntry* ent, void* user)
     return NULL;
 }
 
-ConfigBoron::ConfigBoron(const char* renderPath, const char* modulePath)
+ConfigBoron::ConfigBoron(const char* renderPath, const char* modulePath,
+                         const char* musicPath)
 {
     UBlockIt bi;
     const char* error = NULL;
@@ -914,10 +994,10 @@ ConfigBoron::ConfigBoron(const char* renderPath, const char* modulePath)
     ur_internAtoms(ut, "hit_flash miss_flash random shrine abyss"
                        " imageset tileanims _cel rect", &sym_hitFlash);
 
-    mod_init(&mod, 3);
-    configN = UR_INVALID_BUF;
+    mod_init(&mod, 4);
+    configN = musicN = UR_INVALID_BUF;
 
-    if (renderPath) {
+    if (renderPath && renderPath[0]) {
         error = mod_addLayer(&mod, renderPath, NULL, NULL, NULL);
         if (error)
             errorFatal("%s (%s)", error, renderPath);
@@ -927,22 +1007,16 @@ ConfigBoron::ConfigBoron(const char* renderPath, const char* modulePath)
     if (error)
         errorFatal("%s (%s)", error, modulePath);
 
+    if (musicPath && musicPath[0]) {
+        error = mod_addLayer(&mod, musicPath, NULL, NULL, NULL);
+        if (error)
+            errorFatal("%s (%s)", error, musicPath);
+    }
+
     npcTalk_init(&xcd.talk, ut);
 
 
     // Load primary elements.
-
-    // schemeNames
-    if (blockIt(&bi, CI_GRAPHICS)) {
-        ur_foreach (bi) {
-            if (ur_is(bi.it, UT_WORD) && ur_atom(bi.it) == sym_imageset) {
-                ++bi.it;
-                if (ur_is(bi.it, UT_WORD))
-                    xcd.schemeNames.push_back(ur_atomCStr(ut, ur_atom(bi.it)));
-                bi.it += 2;
-            }
-        }
-    }
 
     // layouts
     if (blockIt(&bi, CI_LAYOUTS)) {
@@ -1084,7 +1158,7 @@ ConfigBoron::~ConfigBoron()
 extern "C" int u4find_pathc(const char*, const char*, char*, size_t);
 
 // Create Config service.
-Config* configInit(const char* module) {
+Config* configInit(const char* module, const char* soundtrack) {
     const char* ext;
     char rpath[512];
     char mpath[512];
@@ -1096,7 +1170,7 @@ Config* configInit(const char* module) {
     if (! u4find_pathc(module, ext, mpath, sizeof(mpath)))
         errorFatal("Cannot find module %s", module);
 
-    return new ConfigBoron(renderFound ? rpath : NULL, mpath);
+    return new ConfigBoron(renderFound ? rpath : NULL, mpath, soundtrack);
 }
 
 void configFree(Config* conf) {
@@ -1203,6 +1277,29 @@ int32_t Config::npcTalk(uint32_t appId) {
     return UR_INVALID_BUF;
 }
 
+/*
+ * Return the data from a given source filename.
+ * The caller must free() this buffer when finished with it.
+ */
+void* Config::loadFile(const char* sourceFilename) const {
+    const CDIEntry* ent = mod_fileEntry(&CX->mod, sourceFilename);
+    if (ent) {
+        void* data = malloc(ent->bytes);
+        if (data) {
+            FILE* fp = fopen(mod_path(&CX->mod, ent), "rb");
+            if (fp) {
+                fseek(fp, ent->offset, SEEK_SET);
+                size_t len = fread(data, 1, ent->bytes, fp);
+                fclose(fp);
+                if (len == ent->bytes)
+                    return data;
+            }
+            free(data);
+        }
+    }
+    return NULL;
+}
+
 const char* Config::modulePath(const CDIEntry* ent) const {
     return mod_path(&CX->mod, ent);
 }
@@ -1248,16 +1345,21 @@ const CDIEntry* Config::soundFile( uint32_t id ) const {
 }
 
 /*
- * Return a C string pointer array for the available Image scheme names.
+ * Return a table of (duration, start) values for a MusicTrack id.
  */
-const char** Config::schemeNames() {
-    vector<const char*>& sarray = CB->sarray;
-    sarray.clear();
-    vector<string>::iterator it;
-    for (it = CB->schemeNames.begin(); it != CB->schemeNames.end(); ++it)
-        sarray.push_back( (*it).c_str() );
-    sarray.push_back(NULL);
-    return &sarray.front();
+const float* Config::voiceParts( uint32_t id ) const {
+    const ConfigBoron* cfg = CX;
+    if (cfg->musicN != UR_INVALID_BUF) {
+        const UThread* ut = cfg->ut;
+        const UBuffer* buf = ur_buffer(cfg->musicN);
+        --id;
+        if (id < (uint32_t) buf->used) {
+            const UCell* cell = buf->ptr.cell + id;
+            if (ur_is(cell, UT_VECTOR))
+                return ur_bufferSeries(ut, cell)->ptr.f;
+        }
+    }
+    return NULL;
 }
 
 /*
@@ -1438,13 +1540,13 @@ next:
 }
 
 static ImageInfo* loadImageInfo(const ConfigBoron* cfg, UBlockIt& bi) {
-    static const uint8_t atlasParam[4] = {
+    static const uint8_t atlasParam[5] = {
         // name  'atlas   numA      spec
-        UT_WORD, UT_WORD, UT_COORD, UT_BLOCK
+        UT_WORD, UT_WORD, UT_COORD, UT_BLOCK, UT_NONE
     };
-    static const uint8_t imageParam[4] = {
+    static const uint8_t imageParam[5] = {
         // name  filename   numA      numB
-        UT_WORD, UT_STRING, UT_COORD, UT_COORD
+        UT_WORD, UT_STRING, UT_COORD, UT_COORD, BLOCK_NONE
     };
     int isAtlas = 0;
 
@@ -1492,18 +1594,14 @@ static ImageInfo* loadImageInfo(const ConfigBoron* cfg, UBlockIt& bi) {
         info->fixup    = numB[2];
     }
 
-    assert(sizeof(atlasParam) == sizeof(imageParam));
-    bi.it += sizeof(imageParam);
-
     // Optional subimages block!
-    if ((bi.it != bi.end) && ur_is(bi.it, UT_BLOCK)) {
+    if (ur_is(bi.it+4, UT_BLOCK)) {
         UBlockIt sit;
         SubImage* subimage;
         int n = 0;
         int celCount;
 
-        ur_blockIt(cfg->ut, &sit, bi.it);
-        ++bi.it;
+        ur_blockIt(cfg->ut, &sit, bi.it+4);
 
         info->subImageCount = (sit.end - sit.it) / 2;
         info->subImages = subimage = new SubImage[info->subImageCount];
@@ -1533,55 +1631,97 @@ static ImageInfo* loadImageInfo(const ConfigBoron* cfg, UBlockIt& bi) {
         }
     }
 
+    assert(sizeof(atlasParam) == sizeof(imageParam));
+    bi.it += sizeof(imageParam);
     return info;
-}
-
-static ImageSet* loadImageSet(const ConfigBoron* cfg, UBlockIt& bi) {
-    static const uint8_t imagesetParam[3] = {
-        // name  extends  images
-        UT_WORD, WORD_NONE, UT_BLOCK
-    };
-    if (! validParam(bi, sizeof(imagesetParam), imagesetParam))
-        errorFatal("Invalid imageset parameters");
-
-    ImageSet* set = new ImageSet;
-    set->name    = ur_atom(bi.it);
-    set->extends = ur_is(bi.it+1, UT_WORD) ? ur_atom(bi.it+1) : SYM_UNSET;
-
-    std::map<Symbol, ImageInfo *>::iterator dup;
-    UBlockIt sit;
-    ur_blockIt(cfg->ut, &sit, bi.it+2);
-    while (sit.it != sit.end) {
-        ImageInfo *info = loadImageInfo(cfg, sit);
-        dup = set->info.find(info->name);
-        if (dup != set->info.end()) {
-            delete dup->second;
-            set->info.erase(dup);
-        }
-        set->info[info->name] = info;
-    }
-
-    return set;
 }
 
 /*
  * Return ImageSet pointer which caller must delete.
  */
-ImageSet* Config::newScheme( uint32_t id ) {
-    UBlockIt bi;
+ImageSet* Config::newImageSet() const {
     const ConfigBoron* cfg = CX;
-    UAtom imageset = cfg->sym_imageset;
-    uint32_t n = 0;
+    UBlockIt sit;
 
-    if (cfg->blockIt(&bi, CI_GRAPHICS)) {
-        ur_foreach (bi) {
-            if (ur_is(bi.it, UT_WORD) && ur_atom(bi.it) == imageset) {
+    if (! cfg->blockIt(&sit, CI_GRAPHICS))
+        return NULL;
+
+    ImageSet* set = new ImageSet;
+
+    std::map<Symbol, ImageInfo *>::iterator dup;
+    while (sit.it != sit.end) {
+        ImageInfo *info = loadImageInfo(cfg, sit);
+        dup = set->info.find(info->name);
+        if (dup != set->info.end()) {
+            delete dup->second;
+            dup->second = info;
+        } else
+            set->info[info->name] = info;
+    }
+
+    return set;
+}
+
+extern float* gpu_emitQuad(float* attr, const float*, const float*);
+
+/*
+ * \param plen  Set to number of floats in draw list.
+ *
+ * Return vertex attribute array which caller must free().
+ */
+float* Config::newDrawList(Symbol name, int* plen) const {
+    UBlockIt bi;
+    UBlockIt ai;
+    float* attrBuf;
+    float* attr;
+    float texW, texH, refW, refH;
+    float drawRect[4];
+    float uvRect[4];
+    int refHi;
+    size_t len;
+    const int entryLen = 3;     // word! coord! block!
+
+    if (CX->blockIt(&bi, CI_DRAW_LISTS)) {
+        const int16_t* cv;
+        const ScreenState* ss = screenState();
+        while (bi.it != bi.end) {
+            if (ur_atom(bi.it) == name) {
+                if (! ur_is(bi.it+2, UT_BLOCK))
+                    return NULL;
+
                 ++bi.it;
-                if( n == id )
-                    return loadImageSet(cfg, bi);
-                bi.it += 2;
-                ++n;
+                cv = bi.it->coord.n;
+                refHi = cv[3];
+                texW = (float) cv[0];
+                texH = (float) cv[1];
+                refW = ss->aspectW / (float) cv[2];
+                refH = ss->aspectH / (float) refHi;
+
+                ++bi.it;
+                ur_blockIt(CX->ut, &ai, bi.it);
+                len = (ai.end - ai.it) * 7 * 6;
+                attr = attrBuf = (float*) malloc(len * sizeof(float));
+
+                ur_foreach(ai) {
+                    cv = ai.it->coord.n;
+
+                    drawRect[0] = refW * cv[4];
+                    drawRect[1] = refH * float(refHi - cv[5] - cv[3]);
+                    drawRect[2] = refW * cv[2];
+                    drawRect[3] = refH * cv[3];
+
+                    uvRect[0] = (0.5f + cv[0]) / texW;
+                    uvRect[1] = (0.5f + cv[1]) / texH;
+                    uvRect[2] = (float(cv[0] + cv[2]) - 0.5f) / texW;
+                    uvRect[3] = (float(cv[1] + cv[3]) - 0.5f) / texH;
+
+                    attr = gpu_emitQuad(attr, drawRect, uvRect);
+                }
+
+                *plen = len;
+                return attrBuf;
             }
+            bi.it += entryLen;
         }
     }
     return NULL;
@@ -1632,31 +1772,12 @@ static void conf_loadTileAnimSet(const ConfigBoron* cfg, TileAnimSet* tas,
 /*
  * Return TileAnimSet pointer which caller must delete.
  */
-TileAnimSet* Config::newTileAnims(const char* name) const {
+TileAnimSet* Config::newTileAnims() const {
     UBlockIt bi;
-    UThread* ut = CX->ut;
-    UAtom tileanims = CX->sym_tileanims;
-
-    if (CX->blockIt(&bi, CI_GRAPHICS)) {
-        ur_foreach (bi) {
-            if (ur_is(bi.it, UT_WORD) && ur_atom(bi.it) == tileanims) {
-                ++bi.it;
-                /* find the tile animations for our tileset */
-                if (ur_is(bi.it, UT_WORD) &&
-                    strcmp(name, ur_wordCStr(bi.it)) == 0) {
-                    tileanims = ur_atom(bi.it);
-                    ++bi.it;
-                    if (ur_is(bi.it, UT_BLOCK)) {
-                        TileAnimSet* tanim = new TileAnimSet;
-
-                        tanim->name = tileanims;
-                        ur_blockIt(ut, &bi, bi.it);
-                        conf_loadTileAnimSet(CX, tanim, bi);
-                        return tanim;
-                    }
-                }
-            }
-        }
+    if (CX->blockIt(&bi, CI_TILEANIM)) {
+        TileAnimSet* tanim = new TileAnimSet;
+        conf_loadTileAnimSet(CX, tanim, bi);
+        return tanim;
     }
     return NULL;
 }

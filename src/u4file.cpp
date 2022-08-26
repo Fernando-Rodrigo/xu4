@@ -9,6 +9,7 @@
 #include "u4file.h"
 #include "unzip.h"
 #include "debug.h"
+#include "xu4.h"
 
 using std::map;
 using std::string;
@@ -67,8 +68,6 @@ struct U4ZipPackageMgr {
     std::vector<U4ZipPackage *> packages;
 };
 
-extern bool verbose;
-
 enum UpgradeFlags {
     UPG_PRESENT = 1,
     UPG_INST    = 2
@@ -96,10 +95,12 @@ bool u4fsetup()
     u4zip_instance = new U4ZipPackageMgr();
 
     U4FILE* uf;
-    if ((uf = u4fopen("AVATAR.EXE")))
+    if ((uf = u4fopen("AVATAR.EXE"))) {
         u4fclose(uf);
-    else
+    } else {
+        u4fcleanup();
         return false;
+    }
 
     // Check if upgrade is present & installed.
     upgradeFlags = 0;
@@ -130,29 +131,9 @@ void U4PATH::initDefaultPaths() {
     if (defaultsHaveBeenInitd)
         return;
 
-    //The first part of the path searched will be one of these root directories
-
-    /*Try to cover all root possibilities. These can be added to by separate modules*/
-    rootResourcePaths.push_back(".");
-#ifdef _WIN32
-    rootResourcePaths.push_back("C:");
-    rootResourcePaths.push_back("C:/DOS");
-    rootResourcePaths.push_back("C:/GAMES");
-#else
-#ifdef __linux__
-    {
-    char *home = getenv("HOME");
-    if (home && home[0]) {
-        string str(home);
-        rootResourcePaths.push_back(str + "/.local/share/xu4");
-    }
-    }
-#endif
-    rootResourcePaths.push_back("/usr/share/xu4");
-    rootResourcePaths.push_back("/usr/local/share/xu4");
-#endif
-
-    //The second (specific) part of the path searched will be these various subdirectories
+    // The first part of the path searched will be one of the xu4.resourcePaths.
+    // The second (specific) part of the path searched will be these various
+    // subdirectories.
 
     /* the possible paths where u4 for DOS can be installed */
     u4ForDOSPaths.push_back(".");
@@ -200,7 +181,7 @@ bool u4isUpgradeAvailable() {
  * (switch.bat or setup.bat has been run)
  */
 bool u4isUpgradeInstalled() {
-    if (verbose)
+    if (xu4.verbose)
         printf("u4isUpgradeInstalled %d\n", (upgradeFlags & UPG_INST) ? 1 : 0);
     return upgradeFlags & UPG_INST;
 }
@@ -513,7 +494,7 @@ U4FILE *u4fopen(const string &fname) {
     U4FILE *u4f = NULL;
     unsigned int i;
 
-    if (verbose)
+    if (xu4.verbose)
         printf("looking for %s\n", fname.c_str());
 
     /**
@@ -523,7 +504,7 @@ U4FILE *u4fopen(const string &fname) {
     for (std::vector<U4ZipPackage *>::const_reverse_iterator j = packages.rbegin(); j != packages.rend(); j++) {
         u4f = U4FILE_zip::open(fname, *j);
         if (u4f) {
-            if (verbose) {
+            if (xu4.verbose) {
                 printf("%s found in %s\n", fname.c_str(),
                        (*j)->getFilename().c_str());
             }
@@ -555,7 +536,7 @@ U4FILE *u4fopen(const string &fname) {
 
     if (!pathname.empty()) {
         u4f = U4FILE_stdio::open(pathname.c_str());
-        if (verbose && u4f != NULL)
+        if (xu4.verbose && u4f != NULL)
             printf("%s successfully opened\n", pathname.c_str());
     }
 
@@ -645,12 +626,13 @@ vector<string> u4read_stringtable(U4FILE *f, long offset, int nstrings) {
 
 extern "C" int u4find_pathc(const char* fname, const char* ext,
                             char* path, size_t pathSize) {
-    std::list<string>& rootPaths = U4PATH::getInstance()->rootResourcePaths;
-    std::list<string>::iterator it;
-    for (it = rootPaths.begin(); it != rootPaths.end(); ++it) {
-        snprintf(path, pathSize, "%s/%s%s", it->c_str(), fname, ext);
+    const StringTable* st = &xu4.resourcePaths;
+    const char* root = sst_strings(st);
+    for (uint32_t i = 0; i < st->used; ++i) {
+        snprintf(path, pathSize, "%s/%s%s",
+                 root + sst_start(st, i), fname, ext);
         path[pathSize-1] = '\0';
-        if (verbose)
+        if (xu4.verbose)
             printf("trying to open %s\n", path);
         if (u4fexists(path))
             return 1;
@@ -673,7 +655,7 @@ string u4find_path(const char* fname, const std::list<string>* subPaths) {
     // Try 'file://' protocol if specified
     if (strncmp(fname, "file://", 7) == 0) {
         const char* upath = fname + 7;
-        if (verbose)
+        if (xu4.verbose)
             printf("trying to open %s\n", upath);
         if ((found = u4fexists(upath))) {
             strcpy(path, upath);
@@ -684,22 +666,23 @@ string u4find_path(const char* fname, const std::list<string>* subPaths) {
 
     // Try resource paths
     {
-    std::list<string>::iterator it;
-    for (it = u4Path.rootResourcePaths.begin();
-         it != u4Path.rootResourcePaths.end(); ++it) {
+    const StringTable* st = &xu4.resourcePaths;
+    const char* root = sst_strings(st);
+    for (uint32_t i = 0; i < st->used; ++i) {
         if (subPaths) {
             std::list<string>::const_iterator sub;
             for (sub = subPaths->begin(); sub != subPaths->end(); ++sub) {
                 snprintf(path, sizeof(path), "%s/%s/%s",
-                         it->c_str(), sub->c_str(), fname);
-                if (verbose)
+                         root + sst_start(st, i), sub->c_str(), fname);
+                if (xu4.verbose)
                     printf("trying to open %s\n", path);
                 if ((found = u4fexists(path)))
                     goto done;
             }
         } else {
-            snprintf(path, sizeof(path), "%s/%s", it->c_str(), fname);
-            if (verbose)
+            snprintf(path, sizeof(path), "%s/%s",
+                     root + sst_start(st, i), fname);
+            if (xu4.verbose)
                 printf("trying to open %s\n", path);
             if ((found = u4fexists(path)))
                 goto done;
@@ -708,7 +691,7 @@ string u4find_path(const char* fname, const std::list<string>* subPaths) {
     }
 
 done:
-    if (verbose) {
+    if (xu4.verbose) {
         if (found)
             printf("%s successfully found\n", path);
         else

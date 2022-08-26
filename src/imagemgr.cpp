@@ -5,7 +5,6 @@
 #include <string.h>
 
 #include "config.h"
-#include "debug.h"
 #include "error.h"
 #include "imageloader.h"
 #include "imagemgr.h"
@@ -16,23 +15,12 @@
 
 using std::string;
 
-Image *screenScale(Image *src, int scale, int n, int filter);
-
 
 ImageSymbols ImageMgr::sym;
 
 ImageMgr::ImageMgr() :
     vgaColors(NULL), greyColors(NULL), visionBuf(NULL),
     resGroup(0) {
-#ifdef TRACE_ON
-    logger = new Debug("debug/imagemgr.txt", "ImageMgr");
-    TRACE(*logger, "creating ImageMgr");
-#else
-    logger = NULL;
-#endif
-
-    notice(SENDER_SETTINGS, xu4.settings, this);
-    listenerId = gs_listen(1<<SENDER_SETTINGS, notice, this);
 
     xu4.config->internSymbols(&sym.tiles, 45,
         "tiles charset borders title options_top\n"
@@ -45,13 +33,27 @@ ImageMgr::ImageMgr() :
         "rune4 rune5 rune6 rune7 rune8\n"
         "gemtiles moongate items blackbead whitebead");
 
+    baseSet = xu4.config->newImageSet();
+
+    // Auto assign Settings::videoType.
+    xu4.settings->videoType = GFX_EGA;
+    if (baseSet) {
+        std::map<Symbol, ImageInfo *>::iterator it =
+            baseSet->info.find(sym.tiles);
+        if (it != baseSet->info.end()) {
+            string fname = it->second->getFilename();
+            if (fname.find(".vga") != string::npos)
+                xu4.settings->videoType = GFX_VGA;
+        }
+    }
+
 #if 0
     // Dump images.
     xu4.imageMgr = this;
     char str[24];
     Symbol* stable = &sym.key;
     for (int i = 0; 1; ++i) {
-        ImageInfo* info = get(stable[i], true);
+        ImageInfo* info = get(stable[i]);
         if (info && info->image) {
             sprintf(str, "/tmp/img%02d.ppm", i);
             info->image->save(str);
@@ -63,16 +65,10 @@ ImageMgr::ImageMgr() :
 }
 
 ImageMgr::~ImageMgr() {
-    gs_unplug(listenerId);
-
-    std::map<Symbol, ImageSet *>::iterator it;
-    foreach (it, imageSets)
-        delete it->second;
-
+    delete baseSet;
     delete[] vgaColors;
     delete[] greyColors;
     delete[] visionBuf;
-    delete logger;
 }
 
 void ImageMgr::fixupIntro(Image *im) {
@@ -81,7 +77,7 @@ void ImageMgr::fixupIntro(Image *im) {
     RGBA color;
 
     sigData = xu4.intro->getSigData();
-    if (xu4.settings->videoType != "VGA-ALLPNG" && xu4.settings->videoType != "new") {
+    {
         /* ----------------------------
          * update the position of "and"
          * ---------------------------- */
@@ -136,7 +132,7 @@ void ImageMgr::fixupIntro(Image *im) {
     /* -------------------------
      * update the colors for VGA
      * ------------------------- */
-    if (xu4.settings->videoType == "VGA")
+    if (xu4.settings->videoType == GFX_VGA)
     {
         ImageInfo *borderInfo = ImageMgr::get(BKGD_BORDERS);
         if (! borderInfo)
@@ -173,7 +169,7 @@ void ImageMgr::fixupIntro(Image *im) {
         x = sigData[i] + 0x14;
         y = 0xBF - sigData[i+1];
 
-        if (xu4.settings->videoType != "EGA")
+        if (xu4.settings->videoType != GFX_EGA)
         {
             // yellow gradient
             color = im->setColor(255, (y == 1 ? 250 : 255), blue[y]);
@@ -187,7 +183,7 @@ void ImageMgr::fixupIntro(Image *im) {
      * draw the red line between "Origin Systems, Inc." and "present"
      * -------------------------------------------------------------- */
     /* we're still working with an unscaled surface */
-    if (xu4.settings->videoType != "EGA")
+    if (xu4.settings->videoType != GFX_EGA)
     {
         color = im->setColor(0, 0, 161);    // dark blue
     }
@@ -275,7 +271,7 @@ void ImageMgr::fixupAbacus(Image *im) {
     im->fillRect(24, 186, 8,  1, 0, 255, 80); /* green */
     im->fillRect(24, 199, 8,  1, 0, 255, 80); /* green */
 
-    if (xu4.settings->videoType == "VGA") {
+    if (xu4.settings->videoType == GFX_VGA) {
         RGBA light, dark;
         rgba_set(light, 0x55, 0xff, 0x50, 0xff);
         rgba_set(dark,  0x58, 0x8d, 0x43, 0xff);
@@ -308,51 +304,7 @@ void ImageMgr::fixupFMTowns(Image *im) {
     }
 }
 
-/**
- * Returns information for the given image set.
- */
-ImageSet *ImageMgr::scheme(Symbol name) {
-    std::map<Symbol, ImageSet *>::iterator it = imageSets.find(name);
-    if (it != imageSets.end())
-        return it->second;
-
-    // The ImageSet has not been cached yet, so get it from the Config.
-    const char* nameStr = xu4.config->symbolName(name);
-    const char** names = xu4.config->schemeNames();
-    const char** nit = names;
-    while (*nit) {
-        if (strcmp(nameStr, *nit) == 0) {
-            ImageSet* sp = xu4.config->newScheme(nit - names);
-            if (! sp)
-                break;
-            imageSets[sp->name] = sp;
-            return sp;
-        }
-        ++nit;
-    }
-    return NULL;
-}
-
-/**
- * Returns information for the given image set.
- */
-ImageInfo *ImageMgr::getInfoFromSet(Symbol name, ImageSet *imageset) {
-    if (!imageset)
-        return NULL;
-
-    /* if the image set contains the image we want, we are done */
-    std::map<Symbol, ImageInfo *>::iterator i = imageset->info.find(name);
-    if (i != imageset->info.end())
-        return i->second;
-
-    /* otherwise if this image set extends another, check the base image set */
-    while (imageset->extends != SYM_UNSET) {
-        imageset = scheme(imageset->extends);
-        return getInfoFromSet(name, imageset);
-    }
-
-    return NULL;
-}
+#define isImageChunkId(fn)  (fn[0] == 'I' && fn[1] == 'M' && fn[4] == '\0')
 
 U4FILE * ImageMgr::getImageFile(ImageInfo *info)
 {
@@ -364,34 +316,9 @@ U4FILE * ImageMgr::getImageFile(ImageInfo *info)
         // Original game data - strip off path.
         string basename = fn + ((fn[2] == '/') ? 3 : 4);
 
-        /*
-         * If the u4 VGA upgrade is installed (i.e. setup has been run and
-         * the u4dos files have been renamed), we need to use VGA names
-         * for EGA and vice versa, but *only* when the upgrade file has a
-         * .old extention.  The charset and tiles have a .vga extention
-         * and are not renamed in the upgrade installation process
-         */
-        if (u4isUpgradeInstalled()) {
-            Symbol sname[2];
-            xu4.config->internSymbols(sname, 2, "VGA EGA");
-
-            string vgaFile = getInfoFromSet(info->name, scheme(sname[0]))->getFilename();
-            if (vgaFile.find(".old") != string::npos) {
-                if (xu4.settings->videoType == "EGA")
-                    basename = vgaFile;
-                else
-                    basename = getInfoFromSet(info->name, scheme(sname[1]))->getFilename();
-
-                // Remove u4/ or u4u/ path again.
-                size_t pos = basename.find('/');
-                if (pos != string::npos)
-                    basename.erase(0,pos+1);
-            }
-        }
-
         file = u4fopen(basename);
 #ifdef CONF_MODULE
-    } else if (fn[0] == 'I' && fn[2] < 0x20) {
+    } else if (isImageChunkId(fn)) {
         const CDIEntry* ent = xu4.config->imageFile(fn);
         if (ent) {
             file = u4fopen_stdio(xu4.config->modulePath(ent));
@@ -428,10 +355,18 @@ ImageInfo* ImageMgr::imageInfo(Symbol name, const SubImage** subPtr) {
 }
 
 /**
- * Load in a background image from a ".ega" file.
+ * Load an image.
+ * Return ImageInfo with image pointer set or NULL if load failed.
  */
 ImageInfo *ImageMgr::get(Symbol name) {
-    ImageInfo *info = getInfoFromSet(name, baseSet);
+    if (! baseSet)
+        return NULL;
+
+    std::map<Symbol, ImageInfo *>::iterator it = baseSet->info.find(name);
+    if (it == baseSet->info.end())
+        return NULL;
+
+    ImageInfo* info = it->second;
     if (! info)
         return NULL;
 
@@ -573,7 +508,6 @@ ImageInfo* ImageMgr::load(ImageInfo* info) {
     U4FILE *file = getImageFile(info);
     Image *unscaled = NULL;
     if (file) {
-        TRACE(*logger, string("loading image from file '") + info->filename + string("'"));
         //printf( "ImageMgr load %d:%s\n", resGroup, info->filename.c_str() );
 
         unscaled = loadImage(file, info->filetype, info->width, info->height,
@@ -700,20 +634,14 @@ ImageInfo* ImageMgr::load(ImageInfo* info) {
  */
 const SubImage* ImageMgr::getSubImage(Symbol name, ImageInfo** infoPtr) {
     std::map<Symbol, ImageInfo *>::iterator it;
-    ImageSet *set = baseSet;
-
-    while (set != NULL) {
-        foreach (it, set->info) {
-            ImageInfo *info = (ImageInfo *) it->second;
-            std::map<Symbol, int>::iterator j = info->subImageIndex.find(name);
-            if (j != info->subImageIndex.end()) {
-                *infoPtr = info;
-                return info->subImages + j->second;
-            }
+    foreach (it, baseSet->info) {
+        ImageInfo *info = (ImageInfo *) it->second;
+        std::map<Symbol, int>::iterator j = info->subImageIndex.find(name);
+        if (j != info->subImageIndex.end()) {
+            *infoPtr = info;
+            return info->subImages + j->second;
         }
-        set = scheme(set->extends);
     }
-
     return NULL;
 }
 
@@ -731,23 +659,20 @@ uint16_t ImageMgr::setResourceGroup(uint16_t group) {
  * Free all images that are part of the specified group.
  */
 void ImageMgr::freeResourceGroup(uint16_t group) {
-    std::map<Symbol, ImageSet *>::iterator si;
     std::map<Symbol, ImageInfo *>::iterator j;
 
-    foreach (si, imageSets) {
-        foreach (j, si->second->info) {
-            ImageInfo *info = j->second;
-            if (info->image && (info->resGroup == group)) {
-                //printf("ImageMgr::freeRes %s\n", info->filename.c_str());
+    foreach (j, baseSet->info) {
+        ImageInfo *info = j->second;
+        if (info->image && (info->resGroup == group)) {
+            //printf("ImageMgr::freeRes %s\n", info->filename.c_str());
 
-                if (info->tex) {
-                    gpu_freeTexture(info->tex);
-                    info->tex = 0;
-                }
-
-                delete info->image;
-                info->image = NULL;
+            if (info->tex) {
+                gpu_freeTexture(info->tex);
+                info->tex = 0;
             }
+
+            delete info->image;
+            info->image = NULL;
         }
     }
 }
@@ -786,18 +711,6 @@ const RGBA* ImageMgr::greyPalette() {
         }
     }
     return greyColors;
-}
-
-/**
- * Find the new base image set when settings have changed.
- */
-void ImageMgr::notice(int sender, void* eventData, void* user) {
-    ImageMgr* mgr = (ImageMgr*) user;
-    (void) sender;
-
-    string setname = ((Settings*) eventData)->videoType;
-    TRACE(*logger, string("base image set is '") + setname + string("'"));
-    mgr->baseSet = mgr->scheme( xu4.config->intern(setname.c_str()) );
 }
 
 ImageSet::~ImageSet() {

@@ -57,20 +57,22 @@ public:
     const void* scriptEvalArg(const char* fmt, ...);
     int32_t npcTalk(uint32_t appId);
 #endif
+    void* loadFile(const char* sourceFilename) const;
     const char* modulePath(const CDIEntry*) const;
     const CDIEntry* fileEntry( const char* sourceFilename ) const;
     const CDIEntry* imageFile( const char* id ) const;
     const CDIEntry* mapFile( uint32_t id ) const;
     const CDIEntry* musicFile( uint32_t id ) const;
     const CDIEntry* soundFile( uint32_t id ) const;
+    const float*    voiceParts( uint32_t id ) const;
     int atlasImages(StringId spec, AtlasSubImage* images, int max);
 #else
     const char* musicFile( uint32_t id );
     const char* soundFile( uint32_t id );
 #endif
-    const char** schemeNames();
-    ImageSet* newScheme( uint32_t id );
-    TileAnimSet* newTileAnims(const char* name) const;
+    ImageSet* newImageSet() const;
+    TileAnimSet* newTileAnims() const;
+    float* newDrawList(Symbol name, int* plen) const;
     const Armor*  armor( uint32_t id );
     const Weapon* weapon( uint32_t id );
     int armorType( const char* name );
@@ -89,7 +91,7 @@ protected:
     void* backend;
 };
 
-extern Config* configInit(const char* module);
+extern Config* configInit(const char* module, const char* soundtrack);
 extern void    configFree(Config*);
 
 #define foreach(it, col)    for(it = col.begin(); it != col.end(); ++it)

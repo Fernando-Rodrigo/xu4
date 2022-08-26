@@ -28,11 +28,6 @@
 // 0 = DOS
 #define DEFAULT_LINEOFSIGHT             0
 
-#ifndef IOS
-#define DEFAULT_VIDEO_TYPE              "VGA"
-#else
-#define DEFAULT_VIDEO_TYPE              "new"
-#endif
 #define DEFAULT_GEM_LAYOUT              "Standard"
 #define DEFAULT_SCREEN_SHAKES           1
 #define DEFAULT_GAMMA                   100
@@ -65,6 +60,10 @@
 //--Tile transparency stuff
 #define DEFAULT_SHADOW_PIXEL_OPACITY    64
 #define DEFAULT_SHADOW_PIXEL_SIZE       2
+
+// videoType
+#define GFX_EGA     0
+#define GFX_VGA     1
 
 enum BattleDifficulty {
     BattleDiff_Normal,
@@ -130,12 +129,8 @@ public:
     uint8_t             battleDiff;     // Used by Creature
     uint8_t             filter;         // Defined by screen
     uint8_t             lineOfSight;    // Defined by screen
-
-#if 0
-    //Settings that aren't in file yet
-    int                 pauseForEachTurn;
-    int                 pauseForEachMovement;
-#endif
+    char game[40];
+    char soundtrack[40];
 
     /**
      * Strings, classes, and other objects that cannot
@@ -146,9 +141,7 @@ public:
     long                end_of_bitwise_comparators;
 
     std::string         gemLayout;      // Defined by Config
-    std::string         videoType;      // Defined by Config
     std::string         logging;        // Used by Debug
-    std::string         game;
 };
 
 /**
@@ -162,10 +155,13 @@ public:
 
     void init(const char* profileName);
     void setData(const SettingsData &data);
+    void setGame(const char* modName);
+    void setSoundtrack(const char* modName);
     bool write();
     const std::string &getUserPath() const { return userPath; }
 
     std::string profile;
+    uint8_t videoType;      // Hidden from user in v1.1 (now auto assigned)
 
 private:
     bool read();

@@ -16,12 +16,17 @@
 #include "debug.h"
 #include "error.h"
 #include "game.h"
+#include "gamebrowser.h"
 #include "intro.h"
 #include "progress_bar.h"
 #include "screen.h"
 #include "settings.h"
 #include "sound.h"
 #include "utils.h"
+
+#ifdef ANDROID
+extern "C" const char* androidInternalData();
+#endif
 
 #if defined(MACOSX)
 #include "macosx/osxinit.h"
@@ -34,8 +39,6 @@
 #ifdef DEBUG
 extern int gameSave(const char*);
 #endif
-
-bool verbose = false;
 
 
 #ifdef USE_BORON
@@ -191,14 +194,47 @@ missing_value:
     return 0;
 }
 
+//----------------------------------------------------------------------------
+
+static void initResourcePaths(StringTable* st) {
+#ifdef ANDROID
+    sst_init(st, 2, 64);
+    sst_append(st, androidInternalData(), -1);
+#else
+    char* home;
+
+    sst_init(st, 4, 32);
+
+    sst_append(st, ".", 1);
+#ifdef _WIN32
+    home = getenv("LOCALAPPDATA");
+    if (home && home[0])
+        sst_appendCon(st, home, "\\xu4");
+#else
+    home = getenv("HOME");
+    if (home && home[0]) {
+#ifdef __APPLE__
+        sst_appendCon(st, home, "/Library/Application Support/xu4");
+#else
+        sst_appendCon(st, home, "/.local/share/xu4");
+#endif
+    }
+    sst_append(st, "/usr/share/xu4", -1);
+    sst_append(st, "/usr/local/share/xu4", -1);
+#endif
+#endif
+}
+
+//----------------------------------------------------------------------------
 
 #ifdef DEBUG
-void servicesFree(XU4GameServices*);
+static void servicesFree(XU4GameServices*);
 #endif
 
 void servicesInit(XU4GameServices* gs, Options* opt) {
-    if (opt->flags & OPT_VERBOSE)
-        verbose = true;
+    gs->verbose = opt->flags & OPT_VERBOSE;
+
+    initResourcePaths(&gs->resourcePaths);
 
     if (!u4fsetup())
     {
@@ -225,8 +261,9 @@ void servicesInit(XU4GameServices* gs, Options* opt) {
 
     Debug::initGlobal("debug/global.txt");
 
-    gs->config = configInit(opt->module ? opt->module : "Ultima-IV.mod");
-    screenInit();
+    gs->config = configInit(opt->module ? opt->module : gs->settings->game,
+                            gs->settings->soundtrack);
+    screenInit(LAYER_COUNT);
     Tile::initSymbols(gs->config);
 
     if (! (opt->flags & OPT_NO_AUDIO))
@@ -264,17 +301,52 @@ void servicesInit(XU4GameServices* gs, Options* opt) {
     gs->stage = (opt->flags & OPT_NO_INTRO) ? StagePlay : StageIntro;
 }
 
-void servicesFree(XU4GameServices* gs) {
+static void servicesFreeGame(XU4GameServices* gs) {
     delete gs->game;
     delete gs->intro;
+    delete gs->gameBrowser;
     delete gs->saveGame;
     delete gs->eventHandler;
+
+    gs->game = NULL;
+    gs->intro = NULL;
+    gs->gameBrowser = NULL;
+    gs->saveGame = NULL;
+    gs->eventHandler = NULL;
+
     soundDelete();
     screenDelete();
     configFree(gs->config);
+}
+
+static void servicesFree(XU4GameServices* gs) {
+    servicesFreeGame(gs);
+
     delete gs->settings;
     notify_free(&gs->notifyBus);
     u4fcleanup();
+    sst_free(&gs->resourcePaths);
+}
+
+static void servicesReset(XU4GameServices* gs) {
+    servicesFreeGame(gs);
+
+    const Settings* settings = gs->settings;
+    gs->config = configInit(settings->game, settings->soundtrack);
+    screenInit(LAYER_COUNT);
+    Tile::initSymbols(gs->config);
+
+    soundInit();
+
+    gs->eventHandler = new EventHandler(
+                        1000/settings->gameCyclesPerSecond,
+                        1000/settings->screenAnimationFramesPerSecond);
+
+    uint32_t seed = time(NULL);
+    xu4_srandom(seed);
+    well512_init(gs->randomFx, seed);
+
+    gs->stage = StageIntro;
 }
 
 XU4GameServices xu4;
@@ -331,6 +403,7 @@ int main(int argc, char *argv[]) {
     ++pb;
 #endif
 
+begin_game:
     while( xu4.stage != StageExitGame )
     {
         if( xu4.stage == StageIntro ) {
@@ -346,13 +419,23 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    if (xu4.gameReset) {
+        xu4.gameReset = 0;
+        servicesReset(&xu4);
+        goto begin_game;
+    }
+
     servicesFree(&xu4);
     return 0;
 }
 
+void xu4_selectGame() {
+    if (! xu4.gameBrowser)
+        xu4.gameBrowser = new GameBrowser;
+    xu4.eventHandler->runController(xu4.gameBrowser);
+}
 
 //----------------------------------------------------------------------------
-
 
 /*
  * Seed the random number generator.

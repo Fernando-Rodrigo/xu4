@@ -90,6 +90,7 @@ public:
     bool present();
     void conclude();
     bool keyPressed(int key);
+    bool inputEvent(const InputEvent*);
     unsigned char *getSigData();
     void updateScreen();
     void timerFired();
@@ -171,7 +172,6 @@ private:
         MI_VIDEO_06,
         MI_VIDEO_07,
         MI_VIDEO_08,
-        MI_GFX_SCHEME,
         MI_GFX_TILE_TRANSPARENCY,
         MI_GFX_TILE_TRANSPARENCY_SHADOW_SIZE,
         MI_GFX_TILE_TRANSPARENCY_SHADOW_OPACITY,
