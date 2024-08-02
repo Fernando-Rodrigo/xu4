@@ -1,3 +1,6 @@
+#ifndef TXF_DRAW_H
+#define TXF_DRAW_H
+
 #include <stdint.h>
 
 typedef struct TxfHeader TxfHeader;
@@ -24,13 +27,15 @@ typedef struct {
 TxfGlyph;
 
 typedef struct TxfDrawState TxfDrawState;
+typedef const uint8_t* (*TxfControlFunc)(TxfDrawState*, const uint8_t*, const uint8_t*);
 
 struct TxfDrawState {
     const TxfHeader* tf;
     const TxfHeader* const* fontTable;
-    const uint8_t* (*lowChar)(TxfDrawState*, const uint8_t*, const uint8_t*);
+    TxfControlFunc lowChar;
     const TxfGlyph* prev;
     float prScale;
+    float xMax;
     float x;
     float y;
     float psize;
@@ -59,7 +64,10 @@ int  txf_genText(TxfDrawState* ds, float* uvs, float* vertex, int stride,
 float txf_emWidth(const TxfHeader*, const uint8_t* it, unsigned int len);
 void  txf_emSize(const TxfHeader*, const uint8_t* it, unsigned int len,
                  float* size);
+const uint8_t* txf_controlChar(TxfDrawState* ds, const uint8_t* it,
+                               const uint8_t* end);
 
 #ifdef __cplusplus
 }
+#endif
 #endif

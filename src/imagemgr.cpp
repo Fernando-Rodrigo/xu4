@@ -19,10 +19,9 @@ using std::string;
 ImageSymbols ImageMgr::sym;
 
 ImageMgr::ImageMgr() :
-    vgaColors(NULL), greyColors(NULL), visionBuf(NULL),
-    resGroup(0) {
+    vgaColors(NULL), greyColors(NULL), visionBuf(NULL) {
 
-    xu4.config->internSymbols(&sym.tiles, 45,
+    xu4.config->internSymbols(&sym.tiles, 43,
         "tiles charset borders title options_top\n"
         "options_btm tree portal outside inside\n"
         "wagon gypsy abacus honcom valjus\n"
@@ -31,19 +30,18 @@ ImageMgr::ImageMgr() :
         "spirit humility truth love courage\n"
         "stoncrcl infinity rune1 rune2 rune3\n"
         "rune4 rune5 rune6 rune7 rune8\n"
-        "gemtiles moongate items blackbead whitebead");
+        "gemtiles moongate items");
 
     baseSet = xu4.config->newImageSet();
 
-    // Auto assign Settings::videoType.
-    xu4.settings->videoType = GFX_EGA;
+    vgaGraphics = false;
     if (baseSet) {
         std::map<Symbol, ImageInfo *>::iterator it =
             baseSet->info.find(sym.tiles);
         if (it != baseSet->info.end()) {
             string fname = it->second->getFilename();
             if (fname.find(".vga") != string::npos)
-                xu4.settings->videoType = GFX_VGA;
+                vgaGraphics = true;
         }
     }
 
@@ -55,7 +53,8 @@ ImageMgr::ImageMgr() :
     for (int i = 0; 1; ++i) {
         ImageInfo* info = get(stable[i]);
         if (info && info->image) {
-            sprintf(str, "/tmp/img%02d.ppm", i);
+            sprintf(str, "/tmp/img%02d_%s.ppm", i,
+                    xu4.config->symbolName(info->name));
             info->image->save(str);
         }
         if (stable[i] == sym.whitebead)
@@ -132,29 +131,17 @@ void ImageMgr::fixupIntro(Image *im) {
     /* -------------------------
      * update the colors for VGA
      * ------------------------- */
-    if (xu4.settings->videoType == GFX_VGA)
+    ImageInfo* borders = ImageMgr::get(BKGD_BORDERS);
+    if (borders && (borders->getFilename().compare(0, 4, "u4u/") == 0))
     {
-        ImageInfo *borderInfo = ImageMgr::get(BKGD_BORDERS);
-        if (! borderInfo)
-            errorLoadImage(BKGD_BORDERS);
-
-        delete borderInfo->image;
-        borderInfo->image = NULL;
-        borderInfo = ImageMgr::get(BKGD_BORDERS);
-
-        //borderInfo->image->save("border.png");
-
         // update the border appearance
-        borderInfo->image->drawSubRectOn(im, 0, 96, 0, 0, 16, 56);
+        borders->image->drawSubRectOn(im, 0, 96, 0, 0, 16, 56);
         for (int i=0; i < 9; i++)
         {
-            borderInfo->image->drawSubRectOn(im, 16+(i*32), 96, 144, 0, 48, 48);
+            borders->image->drawSubRectOn(im, 16+(i*32), 96, 144, 0, 48, 48);
         }
         im->drawSubRectInvertedOn(im, 0, 144, 0, 104, 320, 40);
         im->drawSubRectOn(im, 0, 184, 0, 96, 320, 8);
-
-        delete borderInfo->image;
-        borderInfo->image = NULL;
     }
 
     /* -----------------------------
@@ -169,7 +156,7 @@ void ImageMgr::fixupIntro(Image *im) {
         x = sigData[i] + 0x14;
         y = 0xBF - sigData[i+1];
 
-        if (xu4.settings->videoType != GFX_EGA)
+        if (vgaGraphics)
         {
             // yellow gradient
             color = im->setColor(255, (y == 1 ? 250 : 255), blue[y]);
@@ -183,14 +170,11 @@ void ImageMgr::fixupIntro(Image *im) {
      * draw the red line between "Origin Systems, Inc." and "present"
      * -------------------------------------------------------------- */
     /* we're still working with an unscaled surface */
-    if (xu4.settings->videoType != GFX_EGA)
-    {
+    if (vgaGraphics)
         color = im->setColor(0, 0, 161);    // dark blue
-    }
     else
-    {
         color = im->setColor(128, 0, 0);    // dark red for EGA
-    }
+
     for (i = 84; i < 236; i++)  // 152 px wide
         im->fillRect(i, 31, 1, 1, color.r, color.g, color.b);
 }
@@ -271,7 +255,7 @@ void ImageMgr::fixupAbacus(Image *im) {
     im->fillRect(24, 186, 8,  1, 0, 255, 80); /* green */
     im->fillRect(24, 199, 8,  1, 0, 255, 80); /* green */
 
-    if (xu4.settings->videoType == GFX_VGA) {
+    if (vgaGraphics) {
         RGBA light, dark;
         rgba_set(light, 0x55, 0xff, 0x50, 0xff);
         rgba_set(dark,  0x58, 0x8d, 0x43, 0xff);
@@ -311,12 +295,12 @@ U4FILE * ImageMgr::getImageFile(ImageInfo *info)
     U4FILE *file;
     const char* fn = xu4.config->confString(info->filename);
 
-    if (strncmp(fn, "u4/", 3) == 0 ||
-        strncmp(fn, "u4u/", 4) == 0) {
-        // Original game data - strip off path.
-        string basename = fn + ((fn[2] == '/') ? 3 : 4);
-
-        file = u4fopen(basename);
+    if (strncmp(fn, "u4/", 3) == 0) {
+        // Original game data; strip off path.
+        file = u4fopen(string(fn + 3));
+    } else if(strncmp(fn, "u4u/", 4) == 0) {
+        // Upgrade game data; strip off path.
+        file = u4fopen_upgrade(string(fn + 4));
 #ifdef CONF_MODULE
     } else if (isImageChunkId(fn)) {
         const CDIEntry* ent = xu4.config->imageFile(fn);
@@ -500,7 +484,7 @@ ImageInfo* ImageMgr::load(ImageInfo* info) {
 #ifdef CONF_MODULE
     if (info->filetype == FTYPE_ATLAS) {
         info->image = buildAtlas(this, info);
-        info->resGroup = resGroup;
+        info->resGroup = xu4.resGroup;
         return info;
     }
 #endif
@@ -508,7 +492,7 @@ ImageInfo* ImageMgr::load(ImageInfo* info) {
     U4FILE *file = getImageFile(info);
     Image *unscaled = NULL;
     if (file) {
-        //printf( "ImageMgr load %d:%s\n", resGroup, info->filename.c_str() );
+        //printf("ImageMgr load %d:%s\n", xu4.resGroup, info->filename.c_str());
 
         unscaled = loadImage(file, info->filetype, info->width, info->height,
                              (info->fixup == FIXUP_ABYSS) ? BPP_CLUT8
@@ -521,7 +505,7 @@ ImageInfo* ImageMgr::load(ImageInfo* info) {
             return info;
         }
 
-        info->resGroup = resGroup;
+        info->resGroup = xu4.resGroup;
         if (info->width == -1) {
             // Write in the values for later use.
             info->width  = unscaled->width();
@@ -561,7 +545,8 @@ ImageInfo* ImageMgr::load(ImageInfo* info) {
 
 #if 0
         string out("/tmp/xu4/");
-        unscaled->save(out.append(name).append(".ppm").c_str());
+        out.append(xu4.config->symbolName(info->name));
+        unscaled->save(out.append(".ppm").c_str());
 #endif
     }
     else
@@ -620,7 +605,8 @@ ImageInfo* ImageMgr::load(ImageInfo* info) {
 
 #if 0
     string out2("/tmp/xu4/");
-    unscaled->save(out2.append(name).append("-fixup.ppm").c_str());
+    out2.append(xu4.config->symbolName(info->name));
+    unscaled->save(out2.append("-fixup.ppm").c_str());
 #endif
 
     info->image = unscaled;
@@ -643,16 +629,6 @@ const SubImage* ImageMgr::getSubImage(Symbol name, ImageInfo** infoPtr) {
         }
     }
     return NULL;
-}
-
-/**
- * Set the group loaded images will belong to.
- * Return the previously set group.
- */
-uint16_t ImageMgr::setResourceGroup(uint16_t group) {
-    uint16_t prev = resGroup;
-    resGroup = group;
-    return prev;
 }
 
 /**
@@ -682,7 +658,7 @@ void ImageMgr::freeResourceGroup(uint16_t group) {
  */
 const RGBA* ImageMgr::vgaPalette() {
     if (vgaColors == NULL) {
-        U4FILE *pal = u4fopen("u4vga.pal");
+        U4FILE *pal = u4fopen_upgrade("u4vga.pal");
         if (!pal)
             return NULL;
 

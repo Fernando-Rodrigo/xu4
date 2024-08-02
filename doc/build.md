@@ -23,33 +23,34 @@ Developer Builds
 
 ### Dependencies
 
-The following libraries are required:
+The following libraries are required for all targets:
 
- - Allegro 5.2.7 (or later)
  - Boron 2.0.8
- - Faun 0.1.1
+ - Faun 0.1.4
     - Vorbis
  - PNG
 
-Linux distributions will provide the Allegro, Vorbis, & PNG libraries.
+Allegro 5.2.7 (or later) is also required for Windows.  This is optional
+for Linux, which uses the src/glv Git submodule (X11) by default.
+
+Linux distributions will provide the PNG, Vorbis, & X11 libraries.
 Below are example install commands for a few flavors of Linux.
 
 Fedora:
 
-    sudo dnf install allegro5-devel libvorbis-devel libpng-devel
+    sudo dnf install libpng-devel libvorbis-devel libXcursor-devel
 
 Ubuntu:
 
-    sudo add-apt-repository ppa:allegro/5.2
-    sudo apt install liballegro5-dev libvorbis-dev libpng-dev
+    sudo apt install libpng-dev libvorbis-dev libxcursor-dev
 
 The Boron interpreter program is needed to build game modules.
 The static binaries can be downloaded from the
-[Boron homepage](http://urlan.sourceforge.net/boron/).
+[Boron homepage](http://urlan.sourceforge.io/boron/).
 
-The Boron library can be built from
+There are three ways the Boron library can be obtained.  It can be built from
 [source](https://sourceforge.net/p/urlan/boron/code/ci/master/tree/)
-or a pre-built SDK can be downloaded from the
+or a pre-built x86_64 SDK can be downloaded from the
 [xu4 download](http://xu4.sourceforge.net/download.php#devel) page.
 On UNIX systems the following commands will checkout the source using Git,
 properly configure it for xu4, build `libboron.a`, and install it:
@@ -58,8 +59,9 @@ properly configure it for xu4, build `libboron.a`, and install it:
     make -C dist/boron libboron.a
     sudo make -C dist/boron DESTDIR=/usr install-dev
 
-Faun SDKs can be downloaded from the
-[Faun Downloads](https://wickedsmoke.github.io/faun/md_download.html) page.
+Faun SDKs and source can be downloaded from the
+[Faun Releases](https://github.com/WickedSmoke/faun/releases) page.  The
+source is also available via the src/faun Git submodule.
 
 
 ### configure
@@ -78,12 +80,11 @@ The following commands should get you running:
 
     ./configure
     make download
-    make mod
     make
     src/xu4
 
-This downloads the original game archives, packs the game modules, builds the
-binary, and then runs the program.
+This downloads the original game archives, builds the binary, packs the game
+modules, and then runs the program.
 
 ### Copr
 
@@ -162,6 +163,6 @@ using the cbuild `-b` option after the target.
 
 
 [GNU Make]: https://www.gnu.org/software/make/manual/html_node/index.html#toc-Overview-of-make
-[Copr]: http://urlan.sourceforge.net/copr.html
+[Copr]: http://urlan.sourceforge.io/copr.html
 [Podman]: https://podman.io/getting-started/installation
 [Docker]: https://docs.docker.com/get-docker/

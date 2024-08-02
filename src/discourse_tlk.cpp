@@ -20,10 +20,21 @@ enum TalkOpcode {
     OP_PAUSE_ASK = DS_QUESTION
 };
 
+enum VoicePart {
+    VP_I_AM,
+    VP_BYE,
+    VP_GIVE,
+    VP_JOIN,
+    VP_KEYWORD
+};
+
 struct TalkState {
     Person* person;
-    int turnAway;
-    int nextOp;
+    int16_t turnAway;
+    int16_t nextOp;
+    uint16_t voiceStream;
+    uint16_t startVoiceLn;
+    uint16_t askVoiceLn;
 };
 
 typedef const char* (*TalkFunc)(TalkState*, int, const char*);
@@ -80,6 +91,7 @@ static void runTalkDialogue(TalkFunc func, TalkState* ts)
         screenCrLf();
         in = input.c_str();
         if (input.empty() || strncasecmp("bye", in, 3) == 0) {
+            soundSpeakLine(ts->voiceStream, ts->startVoiceLn + VP_BYE);
             message("Bye.\n");
             break;
         }
@@ -106,7 +118,7 @@ static void runTalkDialogue(TalkFunc func, TalkState* ts)
             if (ts->nextOp == OP_PAUSE_ASK) {
                 ts->nextOp = OP_NOP;
 
-                ReadChoiceController::get("");
+                EventHandler::waitAnyKey();
 
                 reply = func(ts, DS_QUESTION, input.c_str());
                 message("\n%s\n\nYou say: ", reply);
@@ -118,15 +130,18 @@ static void runTalkDialogue(TalkFunc func, TalkState* ts)
                 message("You see %s\n", DSTRING(DS_LOOK));
             } else if (inputEq("name")) {
 tell_name:
+                soundSpeakLine(ts->voiceStream, ts->startVoiceLn + VP_I_AM);
                 message("%s says: I am %s\n",
                         DSTRING(DS_PRONOUN), DSTRING(DS_NAME));
             } else if (inputEq("give")) {
                 if (ts->person->getNpcType() == NPC_TALKER_BEGGAR) {
                     message("How much? ");
-                    int gold = ReadIntController::get(2);
+                    int gold = EventHandler::readInt(2);
                     screenCrLf();
                     if (gold > 0) {
                         if (c->party->donate(gold)) {
+                            soundSpeakLine(ts->voiceStream,
+                                           ts->startVoiceLn + VP_GIVE);
                             message("%s says: Oh Thank thee! I shall never "
                                     "forget thy kindness!\n",
                                     DSTRING(DS_PRONOUN));
@@ -134,6 +149,8 @@ tell_name:
                             message("\n\nThou hast not that much gold!\n");
                     }
                 } else {
+                    soundSpeakLine(ts->voiceStream,
+                                   ts->startVoiceLn + VP_GIVE);
                     message("%s says: I do not need thy gold.  Keep it!\n",
                             DSTRING(DS_PRONOUN));
                 }
@@ -141,18 +158,27 @@ tell_name:
                 Virtue virt;
                 const char* name = DSTRING(DS_NAME);
                 if (c->party->canPersonJoin(name, &virt)) {
-					CannotJoinError join = c->party->join(name);
-					if (join == JOIN_SUCCEEDED) {
-						message("I am honored to join thee!\n");
-						c->location->map->removeObject(ts->person);
+                    CannotJoinError join = c->party->join(name);
+                    if (join == JOIN_SUCCEEDED) {
+                        soundSpeakLine(ts->voiceStream,
+                                       ts->startVoiceLn + VP_JOIN);
+                        message("I am honored to join thee!\n");
+                        c->location->map->removeObject(ts->person);
                         break;
-					}
+                    }
                     message("Thou art not %s enough for me to join thee.\n",
                             (join == JOIN_NOT_VIRTUOUS) ?
                                 getVirtueAdjective(virt) : "experienced");
-				} else
+                } else {
+                    // Here we suppress the voice for the one companion of
+                    // the player's class that cannot join.
+                    if (ts->person->getNpcType() != NPC_TALKER_COMPANION) {
+                        soundSpeakLine(ts->voiceStream,
+                                       ts->startVoiceLn + VP_JOIN);
+                    }
                     message("%s says: I cannot join thee.\n",
                             DSTRING(DS_PRONOUN));
+                }
 #if 1
             } else if (inputEq("ojna")) {
                 /*
@@ -378,6 +404,8 @@ void talkRunU4Tlk(const Discourse* disc, int conv, Person* person)
     ts.state.person = person;
     ts.state.turnAway = ts.tlk->turnAway;
     ts.state.nextOp = OP_NOP;
+    ts.state.voiceStream = 0;
+    ts.state.startVoiceLn = 0;
 
     runTalkDialogue(U4Talk_dialogue, &ts.state);
 }
@@ -391,7 +419,7 @@ enum BoronDialogueIndex {
     DI_NAME,
     DI_PRONOUN,
     DI_LOOK,
-    DI_TURN_AWAY,
+    DI_DATA,        // turn-away, voice-stream, voice-line
     DI_TOPICS,
     DI_COUNT
 };
@@ -400,19 +428,26 @@ struct BoronDialogue {
     TalkState state;
     UThread* ut;
     const UCell* values;
+    const UCell* askCell;
     UBlockIt topics;
 };
+
+static inline bool wordQuestionHumility(UThread* ut, const UCell* cell)
+{
+    return strcmp(ur_wordCStr(cell), "ask-humility") == 0;
+}
 
 static const char* dialogueBoron(TalkState* ts, int value, const char* input)
 {
     BoronDialogue* bd = (BoronDialogue*) ts;
     UThread* ut = bd->ut;
     USeriesIter si;
-    const UCell* cell;
+    UIndex n;
 
-    if (input) {
-        const UCell* end = bd->topics.end;
-        UIndex n;
+    if (value == DS_KEYWORD) {
+        int voiceLine = ts->startVoiceLn + VP_KEYWORD;
+        const UCell* cell = bd->topics.it;
+        const UCell* end  = bd->topics.end;
 
         while (cell != end) {
             if (ur_is(cell, UT_STRING)) {
@@ -420,36 +455,97 @@ static const char* dialogueBoron(TalkState* ts, int value, const char* input)
                 n = si.end - si.it;
                 if (strncasecmp(si.buf->ptr.c + si.it, input, n) == 0) {
                     ur_seriesSlice(ut, &si, ++cell);
-                    return si.buf->ptr.c + si.it;
+
+                    // Queue up any following question.
+                    ++cell;
+                    if (cell != end && ur_is(cell, UT_WORD)) {
+                        bd->askCell = cell;
+                        ts->askVoiceLn = voiceLine + 1;
+                        ts->nextOp = OP_PAUSE_ASK;
+                    }
+                    soundSpeakLine(ts->voiceStream, voiceLine);
+                    goto reply;
                 }
                 cell += 2;
+                voiceLine += 1;
             } else if (ur_is(cell, UT_WORD)) {
+                // Skip (ask "Question?" ["Yes reply" "No reply"])
                 cell += 3;
+                voiceLine += 3;
             }
         }
         return NULL;
-    } else {
-        cell = bd->values + value;
-        ur_seriesSlice(ut, &si, cell);
-        //assert(si.buf->form != UR_ENC_UCS2);
-        return si.buf->ptr.c + si.it;
     }
+
+    switch (value) {
+        case DS_QUESTION:
+            if (! bd->askCell)
+                return NULL;
+            soundSpeakLine(ts->voiceStream, ts->askVoiceLn);
+            ur_seriesSlice(ut, &si, bd->askCell + 1);
+            break;
+        case DS_ANSWER_Y:
+            n = 0;
+            goto answer;
+        case DS_ANSWER_N:
+            n = 1;
+answer:
+            if (! bd->askCell)
+                return NULL;
+            if (wordQuestionHumility(ut, bd->askCell))
+                c->party->adjustKarma(n ? KA_HUMBLE : KA_BRAGGED);
+            soundSpeakLine(ts->voiceStream, ts->askVoiceLn + n + 1);
+            {
+            const UBuffer* blk = ur_bufferSer(bd->askCell + 2);
+            ur_seriesSlice(ut, &si, blk->ptr.cell + n);
+            }
+            bd->askCell = NULL;
+            break;
+        default:
+            ur_seriesSlice(ut, &si, bd->values + value);
+            break;
+    }
+
+reply:
+    //assert(si.buf->form != UR_ENC_UCS2);
+    return si.buf->ptr.c + si.it;
 }
 
-void talkRunBoron(const Discourse* disc, int conv, Person* person)
+void talkRunBoron(int32_t discBlkN, int conv, Person* person)
 {
     BoronDialogue bd;
     UThread* ut = xu4.config->boronThread();
-    const UBuffer* blk = ur_buffer(disc->conv.id);
+    const UBuffer* blk = ur_buffer(discBlkN);
 
     bd.ut = ut;
     bd.values = blk->ptr.cell + conv * DI_COUNT;
-    ur_blockIt(bd.ut, &bd.topics, blk->ptr.cell + DI_TOPICS);
+    bd.askCell = NULL;
+    ur_blockIt(ut, &bd.topics, bd.values + DI_TOPICS);
 
-    bd.state.person = person;
-    bd.state.turnAway = (int) ur_int(bd.values + DI_TURN_AWAY);
-    bd.state.nextOp = OP_NOP;
+    {
+    const UCell* data = bd.values + DI_DATA;
+    TalkState* ts = &bd.state;
+
+    ts->person = person;
+    ts->turnAway = data->coord.n[0];
+    ts->nextOp = OP_NOP;
+    ts->voiceStream = data->coord.n[1];
+    if (ts->voiceStream)
+        ts->voiceStream++;       // Config::musicFile() id is one based.
+    ts->startVoiceLn = data->coord.n[2];
+    }
 
     runTalkDialogue(dialogueBoron, &bd.state);
+}
+
+const char* talkNameBoron(int32_t discBlkN, int conv)
+{
+    UThread* ut = xu4.config->boronThread();
+    const UBuffer* blk = ur_buffer(discBlkN);
+    const UCell* values = blk->ptr.cell + conv * DI_COUNT;
+
+    USeriesIter si;
+    ur_seriesSlice(ut, &si, values + DI_NAME);
+    return si.buf->ptr.c + si.it;
 }
 #endif

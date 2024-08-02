@@ -8,6 +8,8 @@
 #include <string>
 #include "types.h"
 
+#define MOD_NAME_LIMIT                  40
+
 #define MIN_SHAKE_INTERVAL              50
 
 #define MAX_BATTLE_SPEED                10
@@ -60,10 +62,6 @@
 //--Tile transparency stuff
 #define DEFAULT_SHADOW_PIXEL_OPACITY    64
 #define DEFAULT_SHADOW_PIXEL_SIZE       2
-
-// videoType
-#define GFX_EGA     0
-#define GFX_VGA     1
 
 enum BattleDifficulty {
     BattleDiff_Normal,
@@ -129,8 +127,8 @@ public:
     uint8_t             battleDiff;     // Used by Creature
     uint8_t             filter;         // Defined by screen
     uint8_t             lineOfSight;    // Defined by screen
-    char game[40];
-    char soundtrack[40];
+    char game[MOD_NAME_LIMIT];
+    char soundtrack[MOD_NAME_LIMIT];
 
     /**
      * Strings, classes, and other objects that cannot
@@ -161,7 +159,6 @@ public:
     const std::string &getUserPath() const { return userPath; }
 
     std::string profile;
-    uint8_t videoType;      // Hidden from user in v1.1 (now auto assigned)
 
 private:
     bool read();

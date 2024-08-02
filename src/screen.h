@@ -89,6 +89,9 @@ struct ScreenState {
     int aspectH;
     int aspectX;        // Origin of aspect-correct area on display.
     int aspectY;
+    int16_t cursorX;
+    int16_t cursorY;
+    bool cursorVisible;
 };
 
 #define SCR_CYCLE_PER_SECOND 4
@@ -99,6 +102,7 @@ void screenDelete(void);
 void screenReInit(void);
 void screenSetLayer(int layer, void (*renderFunc)(ScreenState*, void*),
                     void* data);
+bool screenLayerUsed(int layer);
 void screenSwapBuffers();
 void screenWait(int numberOfAnimationFrames);
 void screenUploadToGPU();
@@ -118,6 +122,7 @@ void screenGemUpdate(void);
 
 void screenCrLf();
 void screenMessage(const char *fmt, ...) PRINTF_LIKE(1, 2);
+void screenMessageCenter(const char* text, int newlines);
 void screenMessageN(const char* buffer, int buflen);
 void screenPrompt(void);
 void screenRedrawMapArea(void);
@@ -132,15 +137,12 @@ void screenDisableMap();
 void screenUpdateMap(TileView* view, const Map* map, const Coords& center);
 #endif
 void screenUpdate(TileView *view, bool showmap, bool blackout);
-void screenUpdateCursor(void);
 void screenUpdateMoons(void);
 void screenUpdateWind(void);
 std::vector<MapTile> screenViewportTile(unsigned int width, unsigned int height, int x, int y, bool &focus);
 
-void screenShowCursor(void);
-void screenHideCursor(void);
-void screenEnableCursor(void);
-void screenDisableCursor(void);
+void screenShowCursor(bool on = true);
+#define screenHideCursor()  screenShowCursor(false)
 void screenSetCursorPos(int x, int y);
 
 bool screenToggle3DDungeonView();

@@ -7,12 +7,13 @@
 #include "error.h"
 #include "textview.h"
 #include "xu4.h"
+#include "sound.h"
 
 #define NOTIFY(ev)  gs_emitMessage(SENDER_MENU, ev)
 
 Menu::Menu() :
     closed(false),
-    title(""),
+    title(NULL),
     titleX(0),
     titleY(0)
 {
@@ -30,7 +31,7 @@ void Menu::removeAll() {
 /**
  * Adds an item to the menu list and returns the menu
  */
-void Menu::add(int id, string text, short x, short y, int sc) {
+void Menu::add(int id, const char* text, short x, short y, int sc) {
     MenuItem *item = new MenuItem(text, x, y, sc);
     item->setId(id);
     items.push_back(item);
@@ -84,8 +85,8 @@ void Menu::setCurrent(int id) {
 
 void Menu::show(TextView *view)
 {
-    if (title.length() > 0)
-        view->textAt(titleX, titleY, title.c_str());
+    if (title)
+        view->textAt(titleX, titleY, title);
 
     for (current = items.begin(); current != items.end(); current++)
     {
@@ -107,8 +108,7 @@ void Menu::show(TextView *view)
                 view->textSelectedAt(mi->getX(), mi->getY(), ctext.c_str());
                 // hack for the custom U5 mix reagents menu
                 // places cursor 1 column over, rather than 2.
-                view->setCursorPos(mi->getX() - (view->getWidth() == 15 ? 1 : 2), mi->getY(), true);
-                view->enableCursor();
+                view->setCursorPos(mi->getX() - (view->columns() == 15 ? 1 : 2), mi->getY());
             }
             else
             {
@@ -146,6 +146,7 @@ void Menu::next() {
             if (++i == items.end())
                 i = items.begin();
         }
+        soundPlay(SOUND_UI_TICK);
     }
 
     setCurrent(i);
@@ -165,6 +166,7 @@ void Menu::prev() {
                 i = items.end();
             i--;
         }
+        soundPlay(SOUND_UI_TICK);
     }
 
     setCurrent(i);
@@ -282,6 +284,7 @@ void Menu::activateItem(int id, MenuEvent::Type action) {
     if (mi->getClosesMenu())
         setClosed(true);
 
+    soundPlay(SOUND_UI_CLICK);
     MenuEvent event(this, (MenuEvent::Type) action, mi);
     mi->activate(event);
     NOTIFY(&event);
@@ -319,7 +322,11 @@ void Menu::setClosed(bool closed) {
     this->closed = closed;
 }
 
-void Menu::setTitle(const string &text, int x, int y) {
+/**
+ * The text argument pointer must remain valid throughout the life of the Menu;
+ * the string is not copied.
+ */
+void Menu::setTitle(const char* text, int x, int y) {
     title = text;
     titleX = x;
     titleY = y;
@@ -332,10 +339,6 @@ MenuController::MenuController(Menu *menu, TextView *view) {
 
 bool MenuController::keyPressed(int key) {
     bool handled = true;
-    bool cursorOn = view->getCursorEnabled();
-
-    if (cursorOn)
-        view->disableCursor();
 
     switch(key) {
     case U4_UP:
@@ -363,8 +366,6 @@ bool MenuController::keyPressed(int key) {
 
     menu->show(view);
 
-    if (cursorOn)
-        view->enableCursor();
     view->update();
 
     if (menu->getClosed())

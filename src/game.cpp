@@ -46,6 +46,8 @@ static bool mixReagentsForSpellU4(int spell);
 static bool mixReagentsForSpellU5(int spell);
 //static void mixReagentsSuper();
 static void newOrder();
+static void gameSpellCastSfx(int spell, int caster, int subject, int spellMp);
+static void gameSpellCastVoc(int spell, int caster, int subject, int spellMp);
 
 /* conversation functions */
 static bool talkAt(const Coords &coords, int distance);
@@ -57,6 +59,7 @@ static bool getChestTrapHandler(int player);
 static bool jimmyAt(const Coords &coords);
 static bool openAt(const Coords &coords);
 static void wearArmor(int player = -1);
+static void exitTransport();
 static void ztatsFor(int player = -1);
 
 /* creature functions */
@@ -75,67 +78,6 @@ static const MouseArea mouseAreas[] = {
     {3, {{  8,184}, {184, 184}, {96, 96}}, MC_SOUTH, {U4_ENTER, 0, U4_DOWN}},
     {0, {{0,0}, {0,0}, {0,0}}, MC_DEFAULT, {0,0}}
 };
-
-ReadPlayerController::ReadPlayerController() : ReadChoiceController("12345678 \033\n") {
-#ifdef IOS
-    U4IOS::beginCharacterChoiceDialog();
-#endif
-}
-
-ReadPlayerController::~ReadPlayerController() {
-#ifdef IOS
-    U4IOS::endCharacterChoiceDialog();
-#endif
-}
-
-bool ReadPlayerController::keyPressed(int key) {
-    bool valid = ReadChoiceController::keyPressed(key);
-    if (valid) {
-        if (value < '1' ||
-            value > ('0' + c->saveGame->members))
-            value = '0';
-    } else {
-        value = '0';
-    }
-    return valid;
-}
-
-int ReadPlayerController::getPlayer() {
-    return value - '1';
-}
-
-int ReadPlayerController::waitFor() {
-    ReadChoiceController::waitFor();
-    return getPlayer();
-}
-
-bool AlphaActionController::keyPressed(int key) {
-    if (islower(key))
-        key = toupper(key);
-
-    if (key >= 'A' && key <= toupper(lastValidLetter)) {
-        screenMessage("%c\n", key);
-        value = key - 'A';
-        doneWaiting();
-    } else if (key == U4_SPACE || key == U4_ESC || key == U4_ENTER) {
-        screenMessage("\n");
-        value = -1;
-        doneWaiting();
-    } else {
-        screenMessage("\n%s", prompt.c_str());
-        return KeyHandler::defaultHandler(key, NULL);
-    }
-    return true;
-}
-
-int AlphaActionController::get(char lastValidLetter, const string &prompt, EventHandler *eh) {
-    if (!eh)
-        eh = xu4.eventHandler;
-
-    AlphaActionController ctrl(lastValidLetter, prompt);
-    eh->pushController(&ctrl);
-    return ctrl.waitFor();
-}
 
 GameController::GameController() : TurnController(1),
     mapArea(BORDER_WIDTH, BORDER_HEIGHT, VIEWPORT_W, VIEWPORT_H),
@@ -186,7 +128,7 @@ void GameController::renderHud(ScreenState* ss, void* data)
 {
     //GameController* gc = (GameController*) data;
 
-    gpu_drawGui(xu4.gpu, GPU_DLIST_HUD);
+    gpu_drawGui(xu4.gpu, GPU_DLIST_HUD, WID_NONE, 0);
 }
 
 void GameController::initScreenWithoutReloadingState()
@@ -209,7 +151,7 @@ void GameController::initScreenWithoutReloadingState()
 
     c->stats->update(); /* draw the party stats */
 
-    screenEnableCursor();
+    screenShowCursor();
     screenMessage("Press Alt-h for help\n");
     screenPrompt();
 
@@ -236,10 +178,7 @@ public:
  * Return true if loading is successful.
  */
 bool GameController::initContext() {
-    Debug gameDbg("debug/game.txt", "Game");
     const Settings& settings = *xu4.settings;
-
-    TRACE(gameDbg, "gameInit() running.");
 
     ProgressBar pb((320/2) - (200/2), (200/2), 200, 10, 0, 4);
     pb.setBorderColor(240, 240, 240);
@@ -255,7 +194,7 @@ bool GameController::initContext() {
             return false;
         }
     }
-    TRACE_LOCAL(gameDbg, "Save game loaded."); ++pb;
+    ++pb;
 
     /* initialize the global game context */
     delete c;
@@ -270,12 +209,11 @@ bool GameController::initContext() {
     c->windDirection = DIR_NORTH;
     c->windCounter = 0;
     c->windLock = false;
+    c->hawkwindHack = false;
     c->horseSpeed = 0;
     c->opacity = 1;
     c->lastCommandTime = c->commandTimer = 0;
     c->lastShip = NULL;
-
-    TRACE_LOCAL(gameDbg, "Global context initialized.");
 
     /* initialize our party */
     c->party = new Party(c->saveGame);
@@ -284,11 +222,10 @@ bool GameController::initContext() {
     setMap(xu4.config->map(MAP_WORLD), 0, NULL);
     c->location->map->clearObjects();
 
-    TRACE_LOCAL(gameDbg, "World map set."); ++pb;
+    ++pb;
 
     /* initialize our start location */
     Map *map = xu4.config->restoreMap(MapId(c->saveGame->location));
-    TRACE_LOCAL(gameDbg, "Initializing start location.");
 
     /* if our map is not the world map, then load our map */
     if (map->type != Map::WORLD)
@@ -318,7 +255,7 @@ bool GameController::initContext() {
      */
     map->putInBounds(c->location->coords);
 
-    TRACE_LOCAL(gameDbg, "Loading monsters."); ++pb;
+    ++pb;
 
     /* load in monsters.sav */
     {
@@ -341,16 +278,20 @@ bool GameController::initContext() {
     }
     }
 
-    spellSetEffectCallback(&gameSpellEffect);
+    uniqueSpellSounds = soundDuration(SOUND_SPELL_A) > 0;
+    spellCastCallback = xu4.config->voiceParts(VOICE_SPELL) ?
+                        gameSpellCastVoc : gameSpellCastSfx;
     itemSetDestroyAllCreaturesCallback(&gameDestroyAllCreatures);
 
     ++pb;
 
-    TRACE_LOCAL(gameDbg, "Settings up reagent menu.");
     c->stats->resetReagentsMenu();
 
+    // When using the borderAttr draw list we need to ensure the ProgressBar
+    // & Loading text are erased.
+    xu4.screenImage->fill(Image::black);
+
     initScreenWithoutReloadingState();
-    TRACE(gameDbg, "gameInit() completed successfully.");
     return true;
 }
 
@@ -561,6 +502,10 @@ int GameController::exitToParentMap() {
             currentMap->annotations.clear();
             currentMap->clearObjects();
 
+            // Dungeons reset on exit.
+            if (isDungeon(currentMap))
+                static_cast<Dungeon *>(currentMap)->unloadRooms();
+
             /* quench the torch of we're on the world map */
             if (prevMap->isWorldMap())
                 c->party->quenchTorch();
@@ -622,9 +567,6 @@ void GameController::finishTurn() {
 
         gameCheckDrowning();
 
-        /* update party stats */
-        //c->stats->setView(STATS_PARTY_OVERVIEW);
-
         screenUpdate(&this->mapArea, true, false);
         screenWait(1);
 
@@ -632,7 +574,7 @@ void GameController::finishTurn() {
         if (!c->party->isFlying()) {
 
             // apply effects from tile avatar is standing on
-            c->party->applyEffect(map, map->tileTypeAt(c->location->coords, WITH_GROUND_OBJECTS)->getEffect());
+            c->party->applyEffect(ALL_PLAYERS, map, map->tileTypeAt(c->location->coords, WITH_GROUND_OBJECTS)->getEffect());
 
             // Move creatures and see if something is attacking the avatar
             Creature* attacker = map->moveObjects(c->location->coords);
@@ -758,12 +700,21 @@ void GameController::gameNotice(int sender, void* eventData, void* user) {
             break;
 
         case PartyEvent::STARVING:
+        {
+            int pcMask = 0;
+
             screenMessage("\n%cStarving!!!%c\n", FG_YELLOW, FG_WHITE);
-            /* FIXME: add sound effect here */
+            soundPlay(SOUND_NPC_STRUCK);
 
             // 2 damage to each party member for starving!
-            for (int i = 0; i < c->saveGame->members; i++)
-                c->party->member(i)->applyDamage(c->location->map, 2);
+            for (int i = 0; i < c->saveGame->members; i++) {
+                if (c->party->member(i)->applyDamage(c->location->map, 2))
+                    pcMask |= 1 << i;
+            }
+
+            if (pcMask)
+                c->stats->flashPlayers(pcMask);
+        }
             break;
 
         default:
@@ -772,48 +723,61 @@ void GameController::gameNotice(int sender, void* eventData, void* user) {
     }
 }
 
+static void gameSpellCastSfx(int spell, int caster, int subject, int spellMp) {
+    /* recalculate spell speed - based on 5/sec */
+    const float MP_OF_LARGEST_SPELL = 45;
+    int time = int(10000.0 / xu4.settings->spellEffectSpeed  *
+                   spellMp / MP_OF_LARGEST_SPELL);
+    soundPlay(SOUND_PREMAGIC_MANA_JUMBLE, time);
+    EventHandler::wait_msecs(time);
+
+    gameSpellEffect(spell, subject, SOUND_MAGIC);
+}
+
+static void gameSpellCastVoc(int spell, int caster, int subject, int spellMp) {
+    PartyMember* pc = c->party->member(caster);
+    const int spellCount = 26;
+    int s0 = spell - 'a';
+    if(s0 < spellCount) {
+        if (pc->getSex() == SEX_MALE)
+            s0 += spellCount;
+        soundSpeakLine(VOICE_SPELL, s0, true);
+    }
+
+    gameSpellEffect(spell, subject, SOUND_MAGIC);
+}
+
 void gameSpellEffect(int spell, int player, Sound sound) {
 
-    int time;
-    Spell::SpecialEffects effect = Spell::SFX_INVERT;
+    int playLimit, time;
+
+    if (sound == SOUND_MAGIC && xu4.game->uniqueSpellSounds) {
+        sound = Sound(SOUND_SPELL_A + spell - 'a');
+        time = soundDuration(sound);
+        playLimit = -1;
+    } else {
+        time = xu4.settings->spellEffectSpeed * 800 /
+               xu4.settings->gameCyclesPerSecond;
+        playLimit = time;
+    }
+    soundPlay(sound, playLimit);
 
     if (player >= 0)
         c->stats->highlightPlayer(player);
 
-    time = xu4.settings->spellEffectSpeed * 800 / xu4.settings->gameCyclesPerSecond;
-    soundPlay(sound, false, time);
+    // Invert the screen while the sound plays.
+    gameUpdateScreen();
+    xu4.game->mapArea.highlight(0, 0, VIEWPORT_W * TILE_WIDTH, VIEWPORT_H * TILE_HEIGHT);
+    EventHandler::wait_msecs(time);
+    xu4.game->mapArea.unhighlight();
 
-    ///The following effect multipliers are not accurate
-    switch(spell)
-    {
-    case 'g': /* gate */
-    case 'r': /* resurrection */
-        break;
-    case 't': /* tremor */
-        effect = Spell::SFX_TREMOR;
-        break;
-    default:
-        /* default spell effect */
-        break;
-    }
+    if (player >= 0)
+        c->stats->highlightPlayer(-1);
 
-    switch(effect)
-    {
-    case Spell::SFX_NONE:
-        break;
-    case Spell::SFX_TREMOR:
-    case Spell::SFX_INVERT:
+    if (spell == 't') {     // Tremor
         gameUpdateScreen();
-        xu4.game->mapArea.highlight(0, 0, VIEWPORT_W * TILE_WIDTH, VIEWPORT_H * TILE_HEIGHT);
-        EventHandler::wait_msecs(time);
-        xu4.game->mapArea.unhighlight();
-
-        if (effect == Spell::SFX_TREMOR) {
-            gameUpdateScreen();
-            soundPlay(SOUND_RUMBLE, false);
-            screenShake(8);
-        }
-        break;
+        soundPlay(SOUND_RUMBLE);
+        screenShake(8);
     }
 }
 
@@ -866,7 +830,7 @@ bool GameController::keyPressed(int key) {
             else {
 #ifdef IOS
                 U4IOS::IOSSuperButtonHelper superHelper;
-                key = ReadChoiceController::get("xk \033\n");
+                key = EventHandler::readChoice("xk \033\n");
 #else
                 key = 'k';
 #endif
@@ -889,7 +853,7 @@ bool GameController::keyPressed(int key) {
             if (up && down) {
 #ifdef IOS
                 U4IOS::IOSClimbHelper climbHelper;
-                key = ReadChoiceController::get("kd \033\n");
+                key = EventHandler::readChoice("kd \033\n");
 #else
                 key = 'k'; // This is consistent with the previous code. Ideally, I would have a UI here as well.
 #endif
@@ -1023,14 +987,19 @@ bool GameController::keyPressed(int key) {
 
         case 8:                     /* ctrl-H */
             if (settings.debug) {
-                screenMessage("Help!\n");
-                screenPrompt();
-
                 /* Help! send me to Lord British (who conveniently is right around where you are)! */
+                screenMessage("Help!\n");
+
+                // Avoid having a horse stuck in the castle.
+                if (c->transportContext == TRANSPORT_HORSE)
+                    exitTransport();
+
+                screenPrompt();
                 setMap(xu4.config->map(MAP_CASTLE_LB2), 1, NULL);
-                c->location->coords.x = 19;
-                c->location->coords.y = 8;
-                c->location->coords.z = 0;
+                Coords& pos = c->location->coords;
+                pos.x = 19;
+                pos.y = 8;
+                pos.z = 0;
             }
             else valid = false;
             break;
@@ -1262,7 +1231,7 @@ bool GameController::keyPressed(int key) {
 #ifdef IOS
             U4IOS::IOSConversationHelper::setIntroString("Use which item?");
 #endif
-            itemUse(gameGetInput().c_str());
+            itemUse(gameGetInput());
             if (settings.enhancements)
                 c->stats->setView(STATS_PARTY_OVERVIEW);
             break;
@@ -1281,18 +1250,7 @@ bool GameController::keyPressed(int key) {
             break;
 
         case 'x':
-            if ((c->transportContext != TRANSPORT_FOOT) && !c->party->isFlying()) {
-                Object *obj = c->location->map->addObject(c->party->getTransport(), c->party->getTransport(), c->location->coords);
-                if (c->transportContext == TRANSPORT_SHIP)
-                    c->lastShip = obj;
-
-                const Tile *avatar = c->location->map->tileset->getByName(Tile::sym.avatar);
-                ASSERT(avatar, "no avatar tile found in tileset");
-                c->party->setTransport(avatar->getId());
-                c->horseSpeed = 0;
-                screenMessage("X-it\n");
-            } else
-                screenMessage("%cX-it What?%c\n", FG_GREY, FG_WHITE);
+            exitTransport();
             break;
 
         case 'y':
@@ -1330,7 +1288,6 @@ bool GameController::keyPressed(int key) {
 #ifdef IOS
             U4IOS::IOSHideActionKeysHelper hideActionKeys;
 #endif
-            ReadChoiceController pauseController("");
 
             screenMessage("Key Reference:\n"
                           "Arrow Keys: Move\n"
@@ -1345,8 +1302,7 @@ bool GameController::keyPressed(int key) {
                           "i: Ignite torch\n"
                           "(more)");
 
-            xu4.eventHandler->pushController(&pauseController);
-            pauseController.waitFor();
+            EventHandler::waitAnyKey();
 
             screenMessage("\n"
                           "j: Jimmy lock\n"
@@ -1362,8 +1318,7 @@ bool GameController::keyPressed(int key) {
                           "t: Talk\n"
                           "(more)");
 
-            xu4.eventHandler->pushController(&pauseController);
-            pauseController.waitFor();
+            EventHandler::waitAnyKey();
 
             screenMessage("\n"
                           "u: Use Item\n"
@@ -1379,8 +1334,7 @@ bool GameController::keyPressed(int key) {
                           ">: + Sound Vol\n"
                           "(more)");
 
-            xu4.eventHandler->pushController(&pauseController);
-            pauseController.waitFor();
+            EventHandler::waitAnyKey();
 
             screenMessage("\n"
                           "Alt-Q: Main Menu\n"
@@ -1406,7 +1360,7 @@ bool GameController::keyPressed(int key) {
                 endTurn = false;
 
                 screenMessage("Quit to menu?");
-                char choice = ReadChoiceController::get("yn \n\033");
+                char choice = EventHandler::readChoice("yn \n\033");
                 if (choice != 'y') {
                     screenMessage("\n");
                     break;
@@ -1469,7 +1423,7 @@ bool GameController::keyPressed(int key) {
         screenPrompt();
     }
 
-    return valid || KeyHandler::defaultHandler(key, NULL);
+    return valid || EventHandler::defaultKeyHandler(key);
 }
 
 bool GameController::inputEvent(const InputEvent* ev) {
@@ -1479,12 +1433,12 @@ bool GameController::inputEvent(const InputEvent* ev) {
         return false;
 
     switch (ev->type) {
-        case CIE_MOUSE_MOVE:
+        case IE_MOUSE_MOVE:
             area = xu4.eventHandler->mouseAreaForPoint(ev->x, ev->y);
             screenSetMouseCursor(area ? area->cursor : MC_DEFAULT);
             break;
 
-        case CIE_MOUSE_PRESS:
+        case IE_MOUSE_PRESS:
             area = xu4.eventHandler->mouseAreaForPoint(ev->x, ev->y);
             if (area && ev->n < 4) {
                 int keyCmd = area->command[ev->n - 1];
@@ -1496,15 +1450,14 @@ bool GameController::inputEvent(const InputEvent* ev) {
     return true;
 }
 
-string gameGetInput(int maxlen) {
-    screenEnableCursor();
+const char* gameGetInput(int maxlen) {
     screenShowCursor();
 #ifdef IOS
     U4IOS::IOSConversationHelper helper;
     helper.beginConversation(U4IOS::UIKeyboardTypeDefault);
 #endif
 
-    return ReadStringController::get(maxlen, TEXT_AREA_X + c->col, TEXT_AREA_Y + c->line);
+    return EventHandler::readString(maxlen, NULL);
 }
 
 int gameGetPlayer(bool canBeDisabled, bool canBeActivePlayer) {
@@ -1521,9 +1474,7 @@ int gameGetPlayer(bool canBeDisabled, bool canBeActivePlayer) {
         }
         else
         {
-            ReadPlayerController readPlayerController;
-            xu4.eventHandler->pushController(&readPlayerController);
-            player = readPlayerController.waitFor();
+            player = EventHandler::choosePlayer();
             if (player >= 0)
                 c->col--;   // Will display the name in place of the number
         }
@@ -1552,15 +1503,10 @@ int gameGetPlayer(bool canBeDisabled, bool canBeActivePlayer) {
 }
 
 Direction gameGetDirection() {
-    ReadDirController dirController;
 
     screenMessage("Dir?");
-#ifdef IOS
-    U4IOS::IOSDirectionHelper directionPopup;
-#endif
 
-    xu4.eventHandler->pushController(&dirController);
-    Direction dir = dirController.waitFor();
+    Direction dir = EventHandler::readDir();
 
     screenMessage("\b\b\b\b");
 
@@ -1606,9 +1552,10 @@ bool gameSpellMixHowMany(int spell, int num, Ingredients *ingredients) {
         ingredients->multiply(num);
         for (i = 0; i < num-1; i++)
             spellMix(spell, ingredients);
-    }
-    else
+    } else {
+        soundPlay(SOUND_FIZZLE);
         screenMessage("It Fizzles!\n\n");
+    }
 
     return true;
 }
@@ -1644,7 +1591,7 @@ bool ZtatsController::keyPressed(int key) {
         doneWaiting();
         return true;
     default:
-        return KeyHandler::defaultHandler(key, NULL);
+        return EventHandler::defaultKeyHandler(key);
     }
 }
 
@@ -1758,8 +1705,7 @@ static bool attackAt(const Coords &coords) {
          (m->movement != MOVEMENT_ATTACK_AVATAR)))
         c->party->adjustKarma(KA_ATTACKED_GOOD);
 
-    CombatController::engage(CombatMap::mapForTile(ground,
-                        c->party->getTransport().getTileType(), m), m);
+    CombatController::engage(xu4.game->combatMapForTile(ground, m), m);
     return true;
 }
 
@@ -1810,7 +1756,7 @@ void castSpell(int player) {
 #ifdef IOS
     U4IOS::IOSCastSpellHelper castSpellController;
 #endif
-    int spell = AlphaActionController::get('z', "Spell: ");
+    int spell = EventHandler::readAlphaAction('z', "Spell: ");
     if (spell == -1)
         return;
 
@@ -1836,7 +1782,7 @@ void castSpell(int player) {
         choiceController.fullSizeChoicePanel();
         choiceController.updateGateSpellChoices();
 #endif
-        int choice = ReadChoiceController::get("12345678 \033\n");
+        int choice = EventHandler::readChoice("12345678 \033\n");
         if (choice < '1' || choice > '8')
             screenMessage("None\n");
         else {
@@ -1870,7 +1816,7 @@ void castSpell(int player) {
         choiceController.updateEnergyFieldSpellChoices();
 #endif
         EnergyFieldType fieldType = ENERGYFIELD_NONE;
-        char key = ReadChoiceController::get("flps \033\n\r");
+        char key = EventHandler::readChoice("flps \033\n\r");
         switch(key) {
         case 'f': fieldType = ENERGYFIELD_FIRE; break;
         case 'l': fieldType = ENERGYFIELD_LIGHTNING; break;
@@ -1953,8 +1899,6 @@ void fire() {
 }
 
 static void hitPartyAtRange(const Coords& coords, int hitFrames) {
-    soundPlay(SOUND_PARTY_STRUCK);
-
     /* FIXME: In u4dos this graphic remains on screen if the player's
        ship is sunk. */
     GameController::flashTile(coords, Tile::sym.hitFlash, hitFrames);
@@ -2124,16 +2068,9 @@ static bool getChestTrapHandler(int player) {
         if ((player >= 0) &&
             (c->saveGame->players[player].dex + 25 < xu4_random(100)))
         {
-            Map* map = c->location->map;
-
-            // Play sound for acid & bomb since applyEffect does not.
-            if (trapType == EFFECT_LAVA || trapType == EFFECT_FIRE)
-                soundPlay(SOUND_POISON_EFFECT);
-
-            if (trapType == EFFECT_LAVA) /* bomb trap */
-                c->party->applyEffect(map, trapType);
-            else
-                c->party->member(player)->applyEffect(map, trapType);
+            c->party->applyEffect(
+                        (trapType == EFFECT_LAVA) ? ALL_PLAYERS : player,
+                        c->location->map, trapType);
         } else {
             soundPlay(SOUND_EVADE);
             screenMessage("Evaded!\n");
@@ -2351,7 +2288,7 @@ horse_moved:
 
             /* if we're still blocked */
             if ((event.result & MOVE_BLOCKED) && !xu4.settings->filterMoveMessages) {
-                soundPlay(SOUND_BLOCKED, false);
+                soundPlay(SOUND_BLOCKED);
                 screenMessage("%cBlocked!%c\n", FG_GREY, FG_WHITE);
             }
         }
@@ -2416,8 +2353,10 @@ void GameController::avatarMovedInDungeon(MoveEvent &event) {
             screenMessage(msg);
         }
 
-        if (event.result & MOVE_BLOCKED)
+        if (event.result & MOVE_BLOCKED) {
+            soundPlay(SOUND_BLOCKED);
             screenMessage("%cBlocked!%c\n", FG_GREY, FG_WHITE);
+        }
     }
 
     /* if we're exiting the map, do this */
@@ -2561,7 +2500,7 @@ void readyWeapon(int player) {
     // get the weapon to use
     c->stats->setView(STATS_WEAPONS);
     screenMessage("Weapon: ");
-    int weapon = AlphaActionController::get(WEAP_MAX + 'a' - 1, "Weapon: ");
+    int weapon = EventHandler::readAlphaAction(WEAP_MAX + 'a' - 1, "Weapon: ");
     c->stats->setView(STATS_PARTY_OVERVIEW);
     if (weapon == -1)
         return;
@@ -2661,7 +2600,7 @@ static void mixReagents() {
             screenMessage("For Spell: ");
             c->stats->setView(STATS_MIXTURES);
 
-            int choice = ReadChoiceController::get("abcdefghijklmnopqrstuvwxyz \033\n\r");
+            int choice = EventHandler::readChoice("abcdefghijklmnopqrstuvwxyz \033\n\r");
             if (choice == ' ' || choice == '\033' || choice == '\n' || choice == '\r')
                 break;
 
@@ -2701,7 +2640,7 @@ static bool mixReagentsForSpellU4(int spell) {
     screenMessage("Reagent: ");
 
     while (xu4.stage == StagePlay) {
-        int choice = ReadChoiceController::get("abcdefgh\n\r \033");
+        int choice = EventHandler::readChoice("abcdefgh\n\r \033");
 
         // done selecting reagents? mix it up and prompt to mix
         // another spell
@@ -2710,8 +2649,10 @@ static bool mixReagentsForSpellU4(int spell) {
 
             if (spellMix(spell, &ingredients))
                 screenMessage("Success!\n\n");
-            else
+            else {
+                soundPlay(SOUND_FIZZLE);
                 screenMessage("It Fizzles!\n\n");
+            }
 
             return false;
         }
@@ -2736,19 +2677,19 @@ static bool mixReagentsForSpellU4(int spell) {
 static bool mixReagentsForSpellU5(int spell) {
     Ingredients ingredients;
 
-    screenDisableCursor();
+    screenHideCursor();
 
     c->stats->getReagentsMenu()->reset(); // reset the menu, highlighting the first item
     ReagentsMenuController getReagentsController(c->stats->getReagentsMenu(), &ingredients, c->stats->getMainArea());
     xu4.eventHandler->pushController(&getReagentsController);
     getReagentsController.waitFor();
 
-    c->stats->getMainArea()->disableCursor();
-    screenEnableCursor();
+    c->stats->getMainArea()->hideCursor();
+    screenShowCursor();
 
     screenMessage("How many? ");
 
-    int howmany = ReadIntController::get(2);
+    int howmany = EventHandler::readInt(2);
     gameSpellMixHowMany(spell, howmany, &ingredients);
 
     return true;
@@ -2802,17 +2743,17 @@ bool gamePeerCity(int city, void *data) {
     if (peerMap != NULL) {
         xu4.game->setMap(peerMap, 1, NULL);
         gameSetViewMode(VIEW_GEM);
-        screenDisableCursor();
+        screenHideCursor();
 
 #ifdef IOS
         U4IOS::IOSConversationChoiceHelper continueHelper;
         continueHelper.updateChoices(" ");
         continueHelper.fullSizeChoicePanel();
 #endif
-        ReadChoiceController::get("\015 \033");
+        EventHandler::readChoice("\015 \033");
 
         xu4.game->exitToParentMap();
-        screenEnableCursor();
+        screenShowCursor();
         gameSetViewMode(VIEW_NORMAL);
         return true;
     }
@@ -2834,7 +2775,7 @@ void peer(bool useGem) {
         screenMessage("Peer at a Gem!\n");
     }
 
-    screenDisableCursor();
+    screenHideCursor();
     gameSetViewMode(VIEW_GEM);
 
 #ifdef IOS
@@ -2842,9 +2783,9 @@ void peer(bool useGem) {
     continueHelper.updateChoices(" ");
     continueHelper.fullSizeChoicePanel();
 #endif
-    ReadChoiceController::get("\015 \033");
+    EventHandler::readChoice("\015 \033");
 
-    screenEnableCursor();
+    screenShowCursor();
     gameSetViewMode(VIEW_NORMAL);
 }
 
@@ -2909,7 +2850,7 @@ static void wearArmor(int player) {
 
     c->stats->setView(STATS_ARMOR);
     screenMessage("Armour: ");
-    int armor = AlphaActionController::get(ARMR_MAX + 'a' - 1, "Armour: ");
+    int armor = EventHandler::readAlphaAction(ARMR_MAX + 'a' - 1, "Armour: ");
     c->stats->setView(STATS_PARTY_OVERVIEW);
     if (armor == -1)
         return;
@@ -2932,6 +2873,22 @@ static void wearArmor(int player) {
         screenMessage("\n%cA %s may NOT use %s%c\n", FG_GREY, getClassName(p->getClass()), a->getName(), FG_WHITE);
         break;
     }
+}
+
+static void exitTransport()
+{
+    if ((c->transportContext != TRANSPORT_FOOT) && !c->party->isFlying()) {
+        Object *obj = c->location->map->addObject(c->party->getTransport(), c->party->getTransport(), c->location->coords);
+        if (c->transportContext == TRANSPORT_SHIP)
+            c->lastShip = obj;
+
+        const Tile *avatar = c->location->map->tileset->getByName(Tile::sym.avatar);
+        ASSERT(avatar, "no avatar tile found in tileset");
+        c->party->setTransport(avatar->getId());
+        c->horseSpeed = 0;
+        screenMessage("X-it\n");
+    } else
+        screenMessage("%cX-it What?%c\n", FG_GREY, FG_WHITE);
 }
 
 /**
@@ -2966,7 +2923,6 @@ static void ztatsFor(int player) {
 void GameController::timerFired() {
     if (cutScene) {
         screenCycle();
-        screenUpdateCursor();
         screenUploadToGPU();
     } else {
         if (++c->windCounter >= MOON_SECONDS_PER_PHASE * 4) {
@@ -3161,8 +3117,7 @@ static void gameCreatureAttack(Creature *m) {
 
     ground = battleGround(c->location->map, c->location->coords);
 
-    CombatController::engage(CombatMap::mapForTile(ground,
-                        c->party->getTransport().getTileType(), m), m);
+    CombatController::engage(xu4.game->combatMapForTile(ground, m), m);
 }
 
 /**
@@ -3273,24 +3228,23 @@ vector<Coords> gameGetDirectionalActionPath(int dirmask, int validDirections,
 void gameDamageParty(int minDamage, int maxDamage) {
     int i;
     int damage;
-    int lastdmged = -1;
 
     for (i = 0; i < c->party->size(); i++) {
         if (xu4_random(2) == 0) {
+            soundPlay(SOUND_PARTY_STRUCK);
             damage = ((minDamage >= 0) && (minDamage < maxDamage)) ?
                 xu4_random((maxDamage + 1) - minDamage) + minDamage :
                 maxDamage;
             c->party->member(i)->applyDamage(c->location->map, damage);
             c->stats->highlightPlayer(i);
-            lastdmged = i;
-            EventHandler::wait_msecs(50);
+            EventHandler::wait_msecs(83);
         }
     }
 
     screenShake(1);
 
     // Un-highlight the last player
-    if (lastdmged != -1) c->stats->highlightPlayer(lastdmged);
+    c->stats->highlightPlayer(-1);
 }
 
 /**
@@ -3302,6 +3256,8 @@ void gameDamageParty(int minDamage, int maxDamage) {
  */
 bool gameDamageShip(int minDamage, int maxDamage) {
     if (c->transportContext == TRANSPORT_SHIP) {
+        soundPlay(SOUND_PARTY_STRUCK);
+        c->stats->flashPlayers(-1);
         screenShake(1);
 
         int damage = ((minDamage >= 0) && (minDamage < maxDamage)) ?
@@ -3564,14 +3520,12 @@ void
 showMixturesSuper(int page = 0) {
   screenTextColor(FG_WHITE);
   for (int i = 0; i < 13; i++) {
-    char buf[4];
 
     const Spell *s = getSpell(i + 13 * page);
     int line = i + 8;
     screenTextAt(2, line, "%s", s->name);
 
-    snprintf(buf, 4, "%3u", c->saveGame->mixtures[i + 13 * page]);
-    screenTextAt(6, line, "%s", buf);
+    screenTextAt(6, line, "%3u", c->saveGame->mixtures[i + 13 * page]);
 
     screenShowChar(32, 9, line);
     int comp = s->components;
@@ -3581,8 +3535,7 @@ showMixturesSuper(int page = 0) {
     }
     screenTextColor(FG_WHITE);
 
-    snprintf(buf, 3, "%2d", s->mp);
-    screenTextAt(19, line, "%s", buf);
+    screenTextAt(19, line, "%2d", s->mp);
   }
 }
 
@@ -3636,7 +3589,7 @@ static void mixReagentsSuper() {
     showMixturesSuper(page);
     screenMessage("For Spell: ");
 
-    int spell = ReadChoiceController::get("abcdefghijklmnopqrstuvwxyz \033\n\r");
+    int spell = EventHandler::readChoice("abcdefghijklmnopqrstuvwxyz \033\n\r");
     if (spell < 'a' || spell > 'z' ) {
       screenMessage("\nDone.\n");
       done = true;
@@ -3661,7 +3614,7 @@ static void mixReagentsSuper() {
       screenMessage("You can make %d.\n", (mixQty > ingQty) ? ingQty : mixQty);
       screenMessage("How many? ");
 
-      int howmany = ReadIntController::get(2);
+      int howmany = EventHandler::readInt(2);
 
       if (howmany == 0) {
         screenMessage("\nNone mixed!\n");

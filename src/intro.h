@@ -86,6 +86,7 @@ public:
     ~IntroController();
 
     bool hasInitiatedNewGame();
+    int  selectedMusic() const { return introMusic; }
 
     bool present();
     void conclude();
@@ -118,8 +119,8 @@ private:
     void drawMapAnimated();
     void drawBeasties();
     void drawBeastie(int beast, int vertoffset, int frame);
-    void animateTree(Symbol frame);
-    void drawCard(int pos, int card, const uint8_t* origin);
+    void animateTree(ImageInfo* tree, Symbol frame);
+    void drawCard(int card, int x, int y);
     void drawAbacusBeads(int row, int selectedVirtue, int rejectedVirtue);
 
     void initQuestionTree();
@@ -127,10 +128,6 @@ private:
     void initPlayers(SaveGame *saveGame);
     std::string getQuestion(int v1, int v2);
     void dispatchMenu(const Menu *menu, MenuEvent &event);
-#ifdef IOS
-public:
-    void tryTriggerIntroMusic();
-#endif
     void initiateNewGame();
     void finishInitiateGame(const string &nameBuffer, SexType sex);
     void startQuestions();
@@ -139,9 +136,6 @@ public:
     void about();
 #ifdef GPU_RENDER
     void enableMap();
-#endif
-#ifdef IOS
-private:
 #endif
     void showText(const string &text);
 
@@ -210,7 +204,6 @@ private:
     TextView extendedMenuArea;
     TextView questionArea;
     TileView mapArea;
-    AnyKeyController anyKey;
 
     // menus
     Menu mainMenu;
@@ -230,6 +223,8 @@ private:
     int answerInd;
     int questionRound;
     int questionTree[15];
+    int beadSub[3];
+    int treeSub[2];
     int beastie1Cycle;
     int beastie2Cycle;
     int beastieOffset;
@@ -243,6 +238,7 @@ private:
     IntroObjectState *objectStateTable;
 #endif
     ImageInfo* beastiesImg;
+    ImageInfo* abacusImg;
 
     bool justInitiatedNewGame;
 
@@ -283,13 +279,8 @@ private:
     void compactTitle();
     void drawTitle();
     void getTitleSourceData();
-#ifdef IOS
-public:
-#endif
+    void shufflePlot(AnimPlot*, int count);
     void skipTitles();
-#ifdef IOS
-private:
-#endif
     std::vector<AnimElement> titles;            // list of title elements
     std::vector<AnimElement>::iterator title;   // current title element
 

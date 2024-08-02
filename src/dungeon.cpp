@@ -10,11 +10,29 @@
 #include "item.h"
 #include "mapmgr.h"
 #include "screen.h"
+#include "stats.h"
 #include "tileset.h"
 #include "utils.h"
 #include "xu4.h"
 
 Dungeon::~Dungeon() {
+    unloadRooms();
+}
+
+/**
+ * Used to reset the dungeon when leaving it.
+ * Map::data is freed to trigger a reload (via loadMap) upon reentry.
+ */
+void Dungeon::unloadRooms()
+{
+    // Free base class data to force a reload.
+    delete[] data;
+    data = NULL;
+
+    // Rooms are created in loadDungeonMap() so they must be deleted.
+    // The rawMap is left as is and will simply be refilled.
+    // n_rooms is not touched as it only gets set once by Config.
+
     if (roomMaps) {
         CombatMap** it  = roomMaps;
         CombatMap** end = it + n_rooms;
@@ -22,9 +40,11 @@ Dungeon::~Dungeon() {
             delete *it;
 
         delete[] roomMaps;
+        roomMaps = NULL;
     }
 
     delete[] rooms;
+    rooms = NULL;
 }
 
 /**
@@ -165,7 +185,9 @@ void dungeonDrinkFountain() {
 
     /* acid fountain */
     case FOUNTAIN_ACID:
+        soundPlay(SOUND_ACID);
         pc->applyDamage(dungeon, 100);      /* 100 damage to drinker */
+        c->stats->flashPlayers(1 << player);
         screenMessage("\nBleck--Nasty!\n");
         break;
 
@@ -180,8 +202,7 @@ void dungeonDrinkFountain() {
     /* poison fountain */
     case FOUNTAIN_POISON:
         if (pc->getStatus() != STAT_POISONED) {
-            soundPlay(SOUND_POISON_DAMAGE);
-            pc->applyEffect(dungeon, EFFECT_POISON);
+            c->party->applyEffect(player, dungeon, EFFECT_POISON);
             pc->applyDamage(dungeon, 100);  /* 100 damage to drinker also */
             screenMessage("\nArgh-Choke-Gasp!\n");
         }
@@ -239,7 +260,9 @@ void dungeonTouchOrb() {
     }
 
     /* deal damage to the party member who touched the orb */
+    soundPlay(SOUND_PC_STRUCK);
     c->party->member(player)->applyDamage(loc->map, damage);
+    c->stats->flashPlayers(1 << player);
 
     /* remove the orb from the map */
     loc->map->setTileAt(loc->coords,
@@ -258,15 +281,12 @@ bool dungeonHandleTrap(TrapType trap) {
         c->party->quenchTorch();
         break;
     case TRAP_FALLING_ROCK:
-        // Treat falling rocks and pits like bomb traps
-        // XXX: That's a little harsh.
         screenMessage("\nFalling Rocks!\n");
         goto pit_damage;
     case TRAP_PIT:
         screenMessage("\nPit!\n");
 pit_damage:
-        soundPlay(SOUND_STONE_FALLING);
-        c->party->applyEffect(dungeon, EFFECT_LAVA);
+        c->party->applyEffect(ALL_PLAYERS, dungeon, EFFECT_ROCKS);
         screenShake(3);     // NOTE: In the DOS version only the view shakes.
         break;
     default: break;

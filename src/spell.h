@@ -56,12 +56,6 @@ struct Spell {
         PARAM_FROMDIR           /* direction from required (winds) */
     } Param;
 
-    typedef enum {
-        SFX_NONE,               /* none */
-        SFX_INVERT,             /* invert the screen (moongates, most normal spells) */
-        SFX_TREMOR              /* tremor spell */
-    } SpecialEffects;
-
     const char *name;
     int components;
     LocationContext context;
@@ -71,9 +65,6 @@ struct Spell {
     int mp;
 };
 
-typedef void (*SpellEffectCallback)(int spell, int player, Sound sound);
-
-void spellSetEffectCallback(SpellEffectCallback callback);
 const char *spellGetName(unsigned int spell);
 int spellGetRequiredMP(unsigned int spell);
 LocationContext spellGetContext(unsigned int spell);

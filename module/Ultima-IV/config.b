@@ -1,9 +1,10 @@
 module [
     author: "xu4 developers"
     about: {{
-        Ultima IV with original graphics.
+        Ultima IV with original EGA graphics and music by
+        Markus Brenner (Minstrel Dragon).
     }}
-    version: "1.1"
+    version: "1.4"
     rules: 'Ultima-IV
 ]
 
@@ -472,16 +473,16 @@ music: [
 
 sound: [
     path %sound
-    %title_fade.ogg
-    %walk_normal.ogg
-    %walk_slowed.ogg
-    %walk_combat.ogg
+    %title_fade_c64.ogg
+    %walk_normal_c64.wav
+    %walk_slowed_c64.wav
+    %walk_combat_c64.wav
     %blocked_dos.ogg
     %error_dos.ogg
-    %pc_attack.ogg
-    %pc_struck.ogg
-    %npc_attack.ogg
-    %npc_struck.ogg
+    %pc_attack_dos.ogg
+    %pc_struck_dos.ogg
+    %npc_attack_dos.ogg
+    %npc_struck_dos.ogg
     %enemy_magic_proj_hit.ogg
     %enemy_magic_proj_hit.ogg
     %poison_effect.ogg
@@ -497,12 +498,16 @@ sound: [
     %party_struck.rfx
     %fx_tremor.ogg
     %spell_precast_dos.ogg
-    %spell_flash_25.ogg
+    %spell_flash_dos.ogg
     %whirlpool.rfx
     %cyclone.rfx
     %gate_open.ogg
     %stone_falling.ogg
     %wind_gust.ogg
+    %ui_click.rfx
+    %ui_tick.rfx
+    %fizzle.rfx
+    %ignite.rfx
 ]
 
 layouts: [

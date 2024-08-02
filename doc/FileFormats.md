@@ -111,7 +111,7 @@ Offset | Tile  | Description
 0x4700 |142-143| Storm (2)
 0x4800 |144-147| Rat (4)
 0x4a00 |148-151| Bat (4)
-0x4c00 |152-156| Giant Spider (4)
+0x4c00 |152-155| Giant Spider (4)
 0x4e00 |156-159| Ghost (4)
 0x5000 |160-163| Slime (4)
 0x5200 |164-167| Troll (4)
@@ -301,7 +301,7 @@ Offset | Bytes | Purpose
 0x0480 |   32  | Repetition of 0x420-0x43F
 0x04A0 |   32  | Repetition of 0x440-0x45F
 0x04C0 |   32  | Movement_behavior for NPCs 0-31 (0x0=Fixed, 0x1=Wander, 0x80=Follow, 0xFF=Attack)
-0x04E0 |   32  | Conversion index (in corresponding .TLK file) for NPCs 0-31
+0x04E0 |   32  | Conversation index (in corresponding .TLK file) for NPCs 0-31
 
 
 .TLK files

@@ -77,6 +77,7 @@ static ALLEGRO_MIXER* fxMixer = NULL;
 static ALLEGRO_AUDIO_STREAM* musicStream = NULL;
 static ALLEGRO_SAMPLE_ID fxControl[FX_CONTROL_SLOTS];
 static uint32_t fxDuration[FX_CONTROL_SLOTS];
+static uint16_t sa_resGroup[SOUND_MAX];
 static std::vector<ALLEGRO_SAMPLE *> sa_samples;
 
 #ifdef CONF_MODULE
@@ -150,6 +151,7 @@ int soundInit(void)
     soundSetVolume(xu4.settings->soundVol);
     //TRACE(*logger, string("Music initialized: volume is ") + (musicEnabled ? "on" : "off"));
 
+    memset(sa_resGroup, 0, sizeof(sa_resGroup));
     sa_samples.resize(SOUND_MAX, NULL);
     controlUsed = 0;
 
@@ -202,6 +204,36 @@ void soundDelete(void)
     audioFunctional = false;
 }
 
+void soundSuspend(int halt)
+{
+    if (audioFunctional) {
+#if 0
+        // Causes 100% CPU usage on Linux with 5.2.7 & 5.2.8.
+        al_set_mixer_playing(finalMix, ! halt);
+#else
+        // al_set_voice_playing doesn't work with mixers, so the mixer is
+        // detached instead (which doesn't actually suspend the backend).
+        if (halt)
+            al_detach_mixer(finalMix);
+        else
+            al_attach_mixer_to_voice(finalMix, voice);
+#endif
+    }
+}
+
+void soundFreeResourceGroup(uint16_t group)
+{
+    if (! audioFunctional)
+        return;
+
+    for (int i = 0; i < SOUND_MAX; ++i) {
+        if (sa_samples[i] && sa_resGroup[i] == group) {
+            al_destroy_sample(sa_samples[i]);
+            sa_samples[i] = NULL;
+        }
+    }
+}
+
 #ifdef CONF_MODULE
 static const char* audioExt(const CDIEntry* entry) {
     // NOTE: Using CDI_MASK_FORMAT since mod_addLayer() changes the 0xDA byte.
@@ -245,12 +277,12 @@ static bool sound_load(Sound sound) {
             errorWarning("Unable to load sound %d", (int) sound);
             return false;
         }
+        sa_resGroup[sound] = xu4.resGroup;
     }
     return true;
 }
 
-void soundPlay(Sound sound, bool onlyOnce, int durationLimitMSec) {
-    (void) onlyOnce;
+void soundPlay(Sound sound, int durationLimitMSec) {
     ASSERT(sound < SOUND_MAX, "Attempted to play an invalid sound in soundPlay()");
 
     // If audio didn't initialize correctly, then we can't play it anyway
@@ -289,7 +321,7 @@ static ALLEGRO_AUDIO_STREAM* moduleAudioStream(const CDIEntry* ent,
                                                ALLEGRO_FILE** fileHandlePtr) {
     ALLEGRO_FILE* fh = *fileHandlePtr;
     if (! fh)
-        *fileHandlePtr = fh = al_fopen(xu4.config->modulePath(), "rb");
+        *fileHandlePtr = fh = al_fopen(xu4.config->modulePath(ent), "rb");
 
     if (fh) {
         ALLEGRO_FILE* slice;
@@ -465,6 +497,7 @@ void musicPlayLocale()
 
 void musicStop()
 {
+    currentTrack = MUSIC_NONE;
     if (musicStream)
         al_set_audio_stream_playing(musicStream, 0);
 }
@@ -600,6 +633,9 @@ bool musicToggle()
     return musicEnabled;
 }
 
+/*
+ * Set volume for sound effects and spoken dialogue.
+ */
 void soundSetVolume(int volume) {
     if (audioFunctional)
         al_set_mixer_gain(fxMixer, float(volume) / MAX_VOLUME);

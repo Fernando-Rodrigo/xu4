@@ -17,11 +17,11 @@
 #define config_soundFile(id)    xu4.config->soundFile(id)
 #define config_musicFile(id)    xu4.config->musicFile(id)
 #define config_voiceParts(id)   xu4.config->voiceParts(id)
-#define BUFFER_LIMIT    32
+#define BUFFER_LIMIT    SOUND_MAX
 #define SOURCE_LIMIT    8
 #define SID_END         7
-#define SID_MUSIC   SOURCE_LIMIT
-#define SID_SPEECH  SOURCE_LIMIT+1
+#define SID_SPEECH  SOURCE_LIMIT
+#define SID_MUSIC   SOURCE_LIMIT+1
 #define BUFFER_MS_FAILED    1
 
 static int currentTrack;
@@ -32,6 +32,7 @@ static int musicFadeMs;             // Minimizes calls to faun_setParameter.
 static float soundVolume = 0.0f;
 static float musicVolume = 0.0f;
 static uint16_t bufferMs[BUFFER_LIMIT];
+static uint16_t bufferResGroup[BUFFER_LIMIT];
 
 /*
  * Initialize sound & music service.
@@ -45,6 +46,7 @@ int soundInit()
     nextSource = 0;
     musicFadeMs = 0;
     memset(bufferMs, 0, sizeof(bufferMs));
+    memset(bufferResGroup, 0, sizeof(bufferResGroup));
 
     error = faun_startup(BUFFER_LIMIT, SOURCE_LIMIT, 2, 0, "xu4");
     if (error) {
@@ -62,6 +64,22 @@ int soundInit()
 void soundDelete()
 {
     faun_shutdown();
+}
+
+void soundSuspend(int halt)
+{
+    faun_suspend(halt);
+}
+
+void soundFreeResourceGroup(uint16_t group)
+{
+    int i;
+    for (i = 0; i < BUFFER_LIMIT; ++i) {
+        if (bufferMs[i] > BUFFER_MS_FAILED && bufferResGroup[i] == group) {
+            bufferMs[i] = bufferResGroup[i] = 0;
+            faun_freeBuffers(i, 1);
+        }
+    }
 }
 
 static int loadSoundBuffer(int sound)
@@ -89,12 +107,12 @@ static int loadSoundBuffer(int sound)
     }
 
     bufferMs[sound] = ms;
+    bufferResGroup[sound] = xu4.resGroup;
     return ms;
 }
 
-void soundPlay(Sound sound, bool onlyOnce, int limitMSec)
+void soundPlay(Sound sound, int limitMSec)
 {
-    (void) onlyOnce;
     ASSERT(sound < SOUND_MAX, "Invalid soundPlay() id");
 
     // Do nothing if muted or soundInit failed.
@@ -243,6 +261,7 @@ void musicPlayLocale()
 
 void musicStop()
 {
+    currentTrack = MUSIC_NONE;
     faun_control(SID_MUSIC, 1, FC_STOP);
 }
 
@@ -321,9 +340,12 @@ bool musicToggle()
     return musicEnabled;
 }
 
+/*
+ * Set volume for sound effects and spoken dialogue.
+ */
 void soundSetVolume(int volume) {
     soundVolume = float(volume) / MAX_VOLUME;
-    faun_setParameter(0, SOURCE_LIMIT, FAUN_VOLUME, soundVolume);
+    faun_setParameter(0, SID_SPEECH+1, FAUN_VOLUME, soundVolume);
 }
 
 int soundVolumeDec()

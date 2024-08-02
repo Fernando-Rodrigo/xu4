@@ -68,9 +68,9 @@ static const UCell* script_eval(UThread* ut, char* script, int len)
 CFUNC(cf_gameWait)
 {
     (void) ut;
-    screenDisableCursor();
+    screenHideCursor();
     EventHandler::wait_msecs((int) ur_int(a1));
-    screenEnableCursor();
+    screenShowCursor();
 
     ur_setId(res, UT_UNSET);
     return UR_OK;
@@ -97,6 +97,38 @@ CFUNC(cf_music)
         case UT_WORD:           // Assuming 'reset
             musicPlayLocale();
             break;
+    }
+    ur_setId(res, UT_UNSET);
+    return UR_OK;
+}
+
+/*-cf-
+    vo
+        part    int!/coord!
+    return: unset!
+
+    Play a line from a voice stream.
+
+    An int! part is relative to the current voice start line.
+    That is set by the global 'voice variable, which is a coord! of
+    (stream id, start line).
+
+    A coord! part directly specifies the stream & line.
+*/
+CFUNC(cf_vo)
+{
+    if (ur_is(a1, UT_INT)) {
+        UBuffer* ctx = ur_threadContext(ut);
+        int vi = static_cast<const ConfigBoron*>(xu4.config)->voiceI;
+        assert(vi >= 0);
+        const UCell* voice = ur_ctxCell(ctx, vi);
+        if (ur_is(voice, UT_COORD)) {
+            int line = voice->coord.n[1] + ur_int(a1);
+            soundSpeakLine(voice->coord.n[0] + 1, line);
+        }
+    }
+    else if (ur_is(a1, UT_COORD)) {
+        soundSpeakLine(a1->coord.n[0] + 1, a1->coord.n[1]);
     }
     ur_setId(res, UT_UNSET);
     return UR_OK;
@@ -190,11 +222,7 @@ CFUNC(cf_innSleep)
 CFUNC(cf_cursor)
 {
     (void) ut;
-    if (ur_logic(a1))
-        screenEnableCursor();
-    else
-        screenDisableCursor();
-
+    screenShowCursor( ur_logic(a1) );
     ur_setId(res, UT_UNSET);
     return UR_OK;
 }
@@ -276,7 +304,7 @@ CFUNC(inputChoiceS)
             valid += cp[si.it];
 
         valid += " \015\033";   // Space, CR, ESC.
-        ch = ReadChoiceController::get(valid);
+        ch = EventHandler::readChoice(valid.c_str());
         screenCrLf();
 
         si.it = start;
@@ -310,7 +338,7 @@ CFUNC(inputChoiceB)
     }
 
     valid += " \015\033";   // Space, CR, ESC.
-    ch = ReadChoiceController::get(valid);
+    ch = EventHandler::readChoice(valid.c_str());
     screenCrLf();
 
     bi.it = start;
@@ -365,7 +393,7 @@ CFUNC(cf_inputNumber)
     int maxLen = ur_int(a1);
     if (maxLen <= 0)
         maxLen = 7;     //Conversation::BUFFERLEN;
-    int val = ReadIntController::get(maxLen);
+    int val = EventHandler::readInt(maxLen);
     screenCrLf();
 
     if (val) {
@@ -387,8 +415,7 @@ CFUNC(cf_inputText)
     int maxLen = ur_int(a1);
     if (maxLen <= 0)
         maxLen = TEXT_AREA_W-2;
-    string str = ReadStringController::get(maxLen, TEXT_AREA_X + c->col,
-                                                   TEXT_AREA_Y + c->line);
+    string str = EventHandler::readString(maxLen);
     screenCrLf();
 
     if (str.empty()) {
@@ -413,13 +440,11 @@ CFUNC(cf_inputText)
 */
 CFUNC(cf_inputPlayer)
 {
-    ReadPlayerController cont;
     int player;
     (void) ut;
     (void) a1;
 
-    xu4.eventHandler->pushController(&cont);
-    player = cont.waitFor();
+    player = EventHandler::choosePlayer();
     screenCrLf();
 
     if (player != -1) {
@@ -609,8 +634,6 @@ CFUNC(cf_pcNeedsQ)
     return UR_OK;
 }
 
-extern SpellEffectCallback spellEffectCallback;
-
 /*-cf-
     pc-heal
         who         int! Player number (1-8)
@@ -628,9 +651,9 @@ CFUNC(cf_pcHeal)
 
     if (player > 0) {
         if (CFUNC_OPTIONS & 1) {
-            screenDisableCursor();
-            (*spellEffectCallback)('r', -1, SOUND_MAGIC);
-            screenEnableCursor();
+            screenHideCursor();
+            gameSpellEffect('r', -1, SOUND_MAGIC);
+            screenShowCursor();
        }
 
         switch (remedy[0]) {
@@ -671,7 +694,11 @@ CFUNC(cf_pay)
         c->party->adjustGold(-price);
         code = a1+2;
     }
+#if BORON_VERSION > 0x020008
+    return (UStatus) boron_reframeDoBlock(ut, code->series.buf, res, 0);
+#else
     return boron_doBlock(ut, code, res);
+#endif
 }
 
 /*-cf-
@@ -787,6 +814,7 @@ CFUNC(cf_removeItems)
 static const BoronCFunc pfFuncs[] = {
     cf_gameWait,
     cf_music,
+    cf_vo,
     cf_relocate,
     cf_damagePc,
     cf_karma,
@@ -811,6 +839,7 @@ static const BoronCFunc pfFuncs[] = {
 static const char pfFuncSpecs[] =
     "game-wait n int!\n"
     "music n\n"
+    "vo n\n"
     "relocate a coord!\n"
     "damage-pc n int! hp int!\n"
     "karma n int!\n"
@@ -856,7 +885,12 @@ static UIndex script_init(UThread* ut, const UCell* blkC)
                       sizeof(pfFuncSpecs)-1);
 
     boron_bindDefault(ut, blkC->series.buf);
-    if (boron_doBlock(ut, blkC, ur_stackTop(ut)) != UR_OK) {
+#if BORON_VERSION > 0x020008
+    if (boron_evalBlock(ut, blkC->series.buf, ur_stackTop(ut)) != UR_OK)
+#else
+    if (boron_doBlock(ut, blkC, ur_stackTop(ut)) != UR_OK)
+#endif
+    {
         const UCell* ex = ur_exception(ut);
         if (ur_is(ex, UT_ERROR))
             script_reportError(ut, ex);

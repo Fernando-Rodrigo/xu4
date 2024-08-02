@@ -37,7 +37,6 @@ struct DngRoom {
     unsigned char party_west_start_x[8];
     unsigned char party_west_start_y[8];
     std::vector<TileId> map_data;
-    unsigned char buffer[7];
 };
 
 /**
@@ -70,6 +69,7 @@ public:
     // Members
     virtual const char* getName() const;
 
+    void unloadRooms();
     DungeonToken tokenForTile(TileId tid) const;
     DungeonToken currentToken();
     uint8_t currentSubToken();
@@ -89,8 +89,6 @@ public:
     CombatMap **roomMaps;
     unsigned int n_rooms;
     int currentRoom;
-    uint8_t party_startx[8];
-    uint8_t party_starty[8];
 };
 
 /**

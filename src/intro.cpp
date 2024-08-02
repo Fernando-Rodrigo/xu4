@@ -325,7 +325,7 @@ bool IntroController::init() {
     justInitiatedNewGame = false;
     introMusic = MUSIC_TOWNS;
 
-    uint16_t saveGroup = xu4.imageMgr->setResourceGroup(StageIntro);
+    uint16_t saveGroup = xu4_setResourceGroup(StageIntro);
 
     // sigData is referenced during Titles initialization
     binData = new IntroBinData();
@@ -383,7 +383,7 @@ bool IntroController::init() {
     if (bSkipTitles)
         updateScreen();
 
-    xu4.imageMgr->setResourceGroup(saveGroup);
+    xu4_setResourceGroup(saveGroup);
     return true;
 }
 
@@ -409,7 +409,7 @@ void IntroController::deleteIntro() {
     objectStateTable = NULL;
 #endif
 
-    xu4.imageMgr->freeResourceGroup(StageIntro);
+    xu4_freeResourceGroup(StageIntro);
     beastiesImg = NULL;
 }
 
@@ -453,9 +453,9 @@ bool IntroController::keyPressed(int key) {
         case 'c': {
             // Make a copy of our settings so we can change them
             settingsChanged = *xu4.settings;
-            screenDisableCursor();
+            screenHideCursor();
             runMenu(&confMenu, &extendedMenuArea, true);
-            screenEnableCursor();
+            screenShowCursor();
             updateScreen();
             break;
         }
@@ -491,21 +491,24 @@ bool IntroController::keyPressed(int key) {
         return true;
     }
 
-    return valid || KeyHandler::defaultHandler(key, NULL);
+    return valid || EventHandler::defaultKeyHandler(key);
 }
 
 bool IntroController::inputEvent(const InputEvent* ev) {
-    if (mode == INTRO_MENU &&
-        ev->type == CIE_MOUSE_PRESS && ev->n == CMOUSE_LEFT)
+    if (ev->type == IE_MOUSE_PRESS && ev->n == CMOUSE_LEFT)
     {
-        int cx, cy;
-        menuArea.mouseTextPos(ev->x, ev->y, cx, cy);
+        if (mode == INTRO_TITLES || mode == INTRO_MAP)
+            keyPressed(U4_SPACE);
+        else if (mode == INTRO_MENU) {
+            int cx, cy;
+            menuArea.mouseTextPos(ev->x, ev->y, cx, cy);
 
-        // Matches text position in updateScreen().
-        if (cx >= 10 && cx <= 28) {
-            if (cy >= 5 && cy <= 9) {
-                static const char menuKey[] = "rjica";
-                keyPressed( menuKey[cy - 5] );
+            // Matches text position in updateScreen().
+            if (cx >= 10 && cx <= 28) {
+                if (cy >= 5 && cy <= 9) {
+                    static const char menuKey[] = "rjica";
+                    keyPressed( menuKey[cy - 5] );
+                }
             }
         }
     }
@@ -678,47 +681,37 @@ void IntroController::drawBeastie(int beast, int vertoffset, int frame) {
  * painted: the circle without the moongate, but with a small white
  * dot representing the anhk and history book.
  */
-void IntroController::animateTree(Symbol frame) {
+void IntroController::animateTree(ImageInfo* tree, Symbol frame) {
     int fi, fcount;
     int gateH, deltaH;
-    int x, y, ytop;
-    const SubImage* subimage;
-    ImageInfo *info = xu4.imageMgr->imageInfo(IMG_MOONGATE, &subimage);
-    if (! subimage)
-        return;
+    int x, y;
+    const SubImage* moongate = tree->subImages + treeSub[0];
+    const SubImage* gate_pos = tree->subImages + treeSub[1];
 
-    // Hack to account for different tree images.
-    if (xu4.settings->videoType == GFX_EGA) {
-        x = 72;
-        ytop = 68;
-    } else {
-        x = 84;
-        ytop = 53;
-    }
-
-    y = ytop + subimage->height;
-    fcount = subimage->height;
+    x = gate_pos->x;
+    y = gate_pos->y + moongate->height;
+    fcount = moongate->height;
 
     if (frame == IMG_MOONGATE) {
         soundPlay(SOUND_GATE_OPEN);
         gateH = 1;
         deltaH = 1;
     } else {
-        gateH = subimage->height - 1;
+        gateH = moongate->height - 1;
         deltaH = -1;
     }
 
     for (fi = 0; fi < fcount; ++fi) {
         if (deltaH < 0)
-            backgroundArea.draw(frame, x, ytop);
+            backgroundArea.draw(frame, x, gate_pos->y);
 
-        info->image->drawSubRect(x, y - gateH, subimage->x, subimage->y,
-                                 subimage->width, gateH);
+        tree->image->drawSubRect(x, y - gateH, moongate->x, moongate->y,
+                                 moongate->width, gateH);
         gateH += deltaH;
         if (gateH < 0)
             gateH = 0;
-        else if (gateH > subimage->height)
-            gateH = subimage->height;
+        else if (gateH > moongate->height)
+            gateH = moongate->height;
 
         screenUploadToGPU();
         if (EventHandler::wait_msecs(42))
@@ -729,37 +722,32 @@ void IntroController::animateTree(Symbol frame) {
 /**
  * Draws the cards in the character creation sequence with the gypsy.
  */
-void IntroController::drawCard(int pos, int card, const uint8_t* origin) {
+void IntroController::drawCard(int card, int x, int y) {
     static const char *cardNames[] = {
         "honestycard", "compassioncard", "valorcard", "justicecard",
         "sacrificecard", "honorcard", "spiritualitycard", "humilitycard"
     };
-
-    ASSERT(pos == 0 || pos == 1, "invalid pos: %d", pos);
     ASSERT(card < 8, "invalid card: %d", card);
 
-    backgroundArea.draw(xu4.config->intern(cardNames[card]),
-                        pos ? origin[2] : origin[0], origin[1]);
+    backgroundArea.draw(xu4.config->intern(cardNames[card]), x, y);
 }
 
 /**
  * Draws the beads in the abacus during the character creation sequence
  */
 void IntroController::drawAbacusBeads(int row, int selectedVirtue, int rejectedVirtue) {
-    static const uint8_t positionTable[8] = {
-        128, 9, 24, 15,     // EGA
-        128, 8, 18, 16,     // VGA
-    };
     ASSERT(row >= 0 && row < 7, "invalid row: %d", row);
     ASSERT(selectedVirtue < 8 && selectedVirtue >= 0, "invalid virtue: %d", selectedVirtue);
     ASSERT(rejectedVirtue < 8 && rejectedVirtue >= 0, "invalid virtue: %d", rejectedVirtue);
 
-    const uint8_t* pos = positionTable;
-    if (xu4.settings->videoType == GFX_VGA)
-        pos += 4;
-    int y = pos[2] + (row * pos[3]);
-    backgroundArea.draw(IMG_WHITEBEAD, pos[0] + (selectedVirtue * pos[1]), y);
-    backgroundArea.draw(IMG_BLACKBEAD, pos[0] + (rejectedVirtue * pos[1]), y);
+    const SubImage* pos = abacusImg->subImages + beadSub[2];
+    int y = pos->y + (row * pos->height);
+    Image::enableBlend(1);
+    backgroundArea.draw(abacusImg, beadSub[0],  // whitebead
+                        pos->x + (selectedVirtue * pos->width), y);
+    backgroundArea.draw(abacusImg, beadSub[1],  // blackbead
+                        pos->x + (rejectedVirtue * pos->width), y);
+    Image::enableBlend(0);
 }
 
 /**
@@ -814,14 +802,11 @@ void IntroController::updateScreen() {
 
         // draw the cursor last
         screenSetCursorPos(24, 16);
-        screenShowCursor();
         break;
 
     default:
         ASSERT(0, "bad mode in updateScreen");
     }
-
-    screenUpdateCursor();
 }
 
 /**
@@ -829,9 +814,6 @@ void IntroController::updateScreen() {
  * series of questions to determine the class of the new character.
  */
 void IntroController::initiateNewGame() {
-    // disable the screen cursor because a text cursor will now be used
-    screenDisableCursor();
-
     // draw the extended background for all option screens
     backgroundArea.draw(BKGD_INTRO);
     backgroundArea.draw(BKGD_OPTIONS_BTM, 0, 120);
@@ -842,17 +824,15 @@ void IntroController::initiateNewGame() {
 
     // enable the text cursor after setting it's initial position
     // this will avoid drawing in undesirable areas like 0,0
-    menuArea.setCursorPos(11, 7, false);
-    menuArea.setCursorFollowsText(true);
-    menuArea.enableCursor();
+    menuArea.setCursorPos(11, 7);
 
     drawBeasties();
 
-    string nameBuffer = ReadStringController::get(12, &menuArea, "\033");
+    string nameBuffer = EventHandler::readStringView(12, &menuArea, "\033");
     if (nameBuffer.length() == 0) {
         // the user didn't enter a name
-        menuArea.disableCursor();
-        screenEnableCursor();
+        menuArea.hideCursor();
+        screenShowCursor();
         updateScreen();
         return;
     }
@@ -865,19 +845,19 @@ void IntroController::initiateNewGame() {
     menuArea.textAt(3, 3, "Art thou Male or Female?");
 
     // the cursor is already enabled, just change its position
-    menuArea.setCursorPos(28, 3, true);
+    menuArea.setCursorPos(28, 3);
 
     drawBeasties();
 
     SexType sex;
-    int sexChoice = ReadChoiceController::get("mf");
+    int sexChoice = EventHandler::readChoice("mf");
     if (sexChoice == 'm')
         sex = SEX_MALE;
     else
         sex = SEX_FEMALE;
 
     // Display entry for a moment.
-    menuArea.drawChar(toupper(sexChoice), 28, 3);
+    menuArea.hideCursor();
     screenUploadToGPU();
     EventHandler::wait_msecs(250);
 
@@ -889,11 +869,9 @@ void IntroController::finishInitiateGame(const string &nameBuffer, SexType sex)
 #ifdef IOS
     mode = INTRO_MENU; // ensure we are now in the menu mode, (i.e., stop drawing the map).
 #endif
-    // no more text entry, so disable the text cursor
-    menuArea.disableCursor();
 
     {
-    uint16_t saveGroup = xu4.imageMgr->setResourceGroup(StageIntro);
+    uint16_t saveGroup = xu4_setResourceGroup(StageIntro);
 
     // show the lead up story
     showStory();
@@ -905,7 +883,7 @@ void IntroController::finishInitiateGame(const string &nameBuffer, SexType sex)
     if (xu4.stage != StageIntro)
         return;
 
-    xu4.imageMgr->setResourceGroup(saveGroup);
+    xu4_setResourceGroup(saveGroup);
     }
 
     // write out save game an segue into game
@@ -915,7 +893,7 @@ void IntroController::finishInitiateGame(const string &nameBuffer, SexType sex)
 
     FILE *saveGameFile = fopen((xu4.settings->getUserPath() + PARTY_SAV).c_str(), "wb");
     if (!saveGameFile) {
-        questionArea.disableCursor();
+        questionArea.hideCursor();
         xu4.errorMessage = "Unable to create save game!";
         updateScreen();
         return;
@@ -953,13 +931,13 @@ void IntroController::finishInitiateGame(const string &nameBuffer, SexType sex)
 #ifdef IOS
     U4IOS::switchU4IntroControllerToContinueButton();
 #endif
-    anyKey.wait();
+    EventHandler::waitAnyKey();
 
     showText(binData->introGypsy[GYP_SEGUE2]);
-    anyKey.wait();
+    EventHandler::waitAnyKey();
 
     // done: exit intro and let game begin
-    questionArea.disableCursor();
+    questionArea.hideCursor();
 
     if (xu4.stage != StageExitGame)
         xu4.stage = StagePlay;
@@ -967,17 +945,26 @@ void IntroController::finishInitiateGame(const string &nameBuffer, SexType sex)
 }
 
 void IntroController::showStory() {
+    ImageInfo* treeImg = xu4.imageMgr->get(BKGD_TREE);
+    if (! treeImg)
+        errorLoadImage(BKGD_TREE);
+
+    Symbol sym[2];
+    xu4.config->internSymbols(sym, 2, "moongate gate_pos");
+    treeSub[0] = treeImg->subImageIndex[sym[0]];
+    treeSub[1] = treeImg->subImageIndex[sym[1]];
+
     beastiesVisible = false;
 
     questionArea.setCursorFollowsText(true);
 
     for (int storyInd = 0; storyInd < 24; storyInd++) {
         if (storyInd == 0)
-            backgroundArea.draw(BKGD_TREE);
+            treeImg->image->draw(0, 0);
         else if (storyInd == 6)
             backgroundArea.draw(BKGD_PORTAL);
         else if (storyInd == 11)
-            backgroundArea.draw(BKGD_TREE);
+            treeImg->image->draw(0, 0);
         else if (storyInd == 15)
             backgroundArea.draw(BKGD_OUTSIDE);
         else if (storyInd == 17)
@@ -993,12 +980,12 @@ void IntroController::showStory() {
 
         switch (storyInd) {
             case 3:
-                questionArea.disableCursor();
-                animateTree(IMG_MOONGATE);
+                questionArea.hideCursor();
+                animateTree(treeImg, IMG_MOONGATE);
                 break;
             case 5:
-                questionArea.disableCursor();
-                animateTree(IMG_ITEMS);
+                questionArea.hideCursor();
+                animateTree(treeImg, IMG_ITEMS);
                 break;
             case 20:
                 soundSpeakLine(VOICE_GYPSY, 0);
@@ -1012,8 +999,8 @@ void IntroController::showStory() {
         }
 
         // enable the cursor here to avoid drawing in undesirable locations
-        questionArea.enableCursor();
-        anyKey.wait();
+        questionArea.showCursor();
+        EventHandler::waitAnyKey();
         if (xu4.stage != StageIntro)
             break;
     }
@@ -1024,17 +1011,21 @@ void IntroController::showStory() {
  * characters class.
  */
 void IntroController::startQuestions() {
-    static uint8_t originTable[6] = {
-        12, 12, 218,    // EGA
-        22, 16, 218,    // VGA
-    };
-    ReadChoiceController questionController("ab");
-    uint8_t* origin = originTable;
-    if (xu4.settings->videoType == GFX_VGA)
-        origin += 3;
-
     questionRound = 0;
     initQuestionTree();
+
+    abacusImg = xu4.imageMgr->get(BKGD_ABACUS);
+    if (! abacusImg)
+        errorLoadImage(BKGD_ABACUS);
+
+    Symbol sym[4];
+    xu4.config->internSymbols(sym, 4, "whitebead blackbead bead_pos card_pos");
+    beadSub[0] = abacusImg->subImageIndex[sym[0]];
+    beadSub[1] = abacusImg->subImageIndex[sym[1]];
+    beadSub[2] = abacusImg->subImageIndex[sym[2]];
+
+    const SubImage* cardPos =
+            abacusImg->subImages + abacusImg->subImageIndex[sym[3]];
 
     const vector<string>& gypsyText = binData->introGypsy;
     int i1, i2, n;
@@ -1042,7 +1033,7 @@ void IntroController::startQuestions() {
     while (xu4.stage == StageIntro) {
         // draw the abacus background, if necessary
         if (questionRound == 0) {
-            backgroundArea.draw(BKGD_ABACUS);
+            abacusImg->image->draw(0, 0);
             n = GYP_PLACES_FIRST;
         } else {
             n = (questionRound == 6) ? GYP_PLACES_LAST : GYP_PLACES_TWOMORE;
@@ -1053,7 +1044,7 @@ void IntroController::startQuestions() {
 
         // draw the cards and show the lead up text
 
-        questionArea.disableCursor();
+        questionArea.hideCursor();
         questionArea.clear();
         questionArea.textAt(0, 0, gypsyText[n].c_str());
         questionArea.textAt(0, 1, gypsyText[GYP_UPON_TABLE].c_str());
@@ -1061,21 +1052,21 @@ void IntroController::startQuestions() {
 
         const string& virtue1 = gypsyText[questionTree[i1] + 4];
         questionArea.textAtFmt(0, 2, "%s and", virtue1.c_str());
-        drawCard(0, questionTree[i1], origin);
+        drawCard(questionTree[i1], cardPos->x, cardPos->y);
         EventHandler::wait_msecs(1000);
 
         soundSpeakLine(VOICE_GYPSY, 3);
         questionArea.textAtFmt(virtue1.size() + 4, 2, " %s.  She says",
                                gypsyText[questionTree[i2] + 4].c_str());
-        drawCard(1, questionTree[i2], origin);
+        drawCard(questionTree[i2], cardPos->x + cardPos->width, cardPos->y);
         questionArea.textAt(0, 3, "\"Consider this:\"");
-        questionArea.enableCursor();
+        questionArea.showCursor();
 
 #ifdef IOS
         U4IOS::switchU4IntroControllerToContinueButton();
 #endif
         // wait for a key
-        anyKey.wait();
+        EventHandler::waitAnyKey();
 
         // show the question to choose between virtues
         showText(getQuestion(questionTree[i1], questionTree[i2]));
@@ -1084,8 +1075,7 @@ void IntroController::startQuestions() {
         U4IOS::switchU4IntroControllerToABButtons();
 #endif
         // wait for an answer
-        xu4.eventHandler->pushController(&questionController);
-        int choice = questionController.waitFor();
+        int choice = EventHandler::readChoice("ab");
 
         // update the question tree
         if (doQuestion(choice == 'a' ? 0 : 1))
@@ -1142,11 +1132,11 @@ void IntroController::about() {
     menuArea.textAt(1, 4, "ribute it and/or modify it under the");
     menuArea.textAt(1, 5, "terms of the GNU GPL as published by");
     menuArea.textAt(1, 6, "the FSF.  See COPYING.");
-    menuArea.textAt(4, 8, "Copyright \011 2002-2022, xu4 Team");
+    menuArea.textAt(4, 8, "Copyright \011 2002-2023, xu4 Team");
     menuArea.textAt(4, 9, "Copyright \011 1987, Lord British");
     drawBeasties();
 
-    anyKey.wait();
+    EventHandler::waitAnyKey();
 
     screenShowCursor();
     updateScreen();
@@ -1189,8 +1179,7 @@ void IntroController::runMenu(Menu *menu, TextView *view, bool withBeasties) {
     menuController.waitFor();
 
     // enable the cursor here, after the menu has been established
-    view->enableCursor();
-    view->disableCursor();
+    view->hideCursor();
 }
 
 /**
@@ -1199,7 +1188,6 @@ void IntroController::runMenu(Menu *menu, TextView *view, bool withBeasties) {
  */
 void IntroController::timerFired() {
     screenCycle();
-    screenUpdateCursor();
 
     if (mode == INTRO_TITLES)
         if (updateTitle() == false)
@@ -1705,6 +1693,10 @@ void IntroController::preloadMap()
 //
 void IntroController::initTitles()
 {
+    int titleDur = soundDuration(SOUND_TITLE_FADE);
+    if (titleDur < 1000)
+        titleDur = 5000;
+
     // add the intro elements
     //          x,  y,   w,  h, method,  delay, duration
     //
@@ -1713,7 +1705,7 @@ void IntroController::initTitles()
     addTitle(  84, 31, 152,  1, BAR,         1000,  500 );  // <bar>
     addTitle(  86, 21, 148,  9, ORIGIN,      1000,  100 );  // "Origin Systems, Inc."
     addTitle( 133, 33,  54,  5, PRESENT,        0,  100 );  // "present"
-    addTitle(  59, 33, 202, 46, TITLE,       1000, 5000 );  // "Ultima IV"
+    addTitle(  59, 33, 202, 46, TITLE,       1000, titleDur );  // "Ultima IV"
     addTitle(  40, 80, 240, 13, SUBTITLE,    1000,  100 );  // "Quest of the Avatar"
     addTitle(   0, 96, 320, 96, MAP,         1000,  100 );  // the map
 
@@ -1802,7 +1794,7 @@ void IntroController::getTitleSourceData()
                     x = srcData[titles[i].animStepMax] - 0x4C;
                     y = 0xC0 - srcData[titles[i].animStepMax+1];
 
-                    if (xu4.settings->videoType != GFX_EGA)
+                    if (xu4.imageMgr->usingVGA())
                     {
                         // yellow gradient
                         color = info->image->setColor(255, (y == 2 ? 250 : 255), blue[y-1]);
@@ -1873,6 +1865,23 @@ void IntroController::getTitleSourceData()
 }
 
 
+void IntroController::shufflePlot(AnimPlot* it, int count)
+{
+    AnimPlot tmp;
+    AnimPlot* randomPick;
+    AnimPlot* last = it + count - 1;
+
+    for (; it != last; ++it) {
+        randomPick = it + xu4_randomFx(count--);
+        if (randomPick != it) {
+            tmp = *it;
+            *it = *randomPick;
+            *randomPick = tmp;
+        }
+    }
+}
+
+
 //
 // Update the title element, drawing the appropriate frame of animation
 //
@@ -1889,30 +1898,21 @@ bool IntroController::updateTitle()
         {
             // reset the base time
             title->timeBase = timeCurrent;
-        }
-        if (title == titles.begin())
-        {
-            // clear the screen
-            xu4.screenImage->fill(Image::black);
-        }
-        if (title->method == TITLE)
-        {
-            // assume this is the first frame of "Ultima IV" and begin sound
-            soundPlay(SOUND_TITLE_FADE);
+
+            if (title == titles.begin()) {
+                // clear the screen
+                xu4.screenImage->fill(Image::black);
+            }
         }
     }
 
     // abort after processing all elements
     if (title == titles.end())
-    {
         return false;
-    }
 
     // delay the drawing of this phase
     if ((timeCurrent - title->timeBase) < title->timeDelay)
-    {
         return true;
-    }
 
     // determine how much of the animation should have been drawn up until now
     timePercent = float(timeCurrent - title->timeBase - title->timeDelay) / title->timeDuration;
@@ -2016,10 +2016,15 @@ bool IntroController::updateTitle()
 
         case TITLE:
         {
+            if (title->animStep == 0 && !bSkipTitles) {
+                // Begin sound on first frame of "Ultima IV".
+                soundPlay(SOUND_TITLE_FADE);
+            }
+
             // blit src to the canvas in a random pixelized manner
             title->animStep = animStepTarget;
 
-            random_shuffle(title->plotData.begin(), title->plotData.end());
+            shufflePlot(title->plotData.data(), title->plotData.size());
             title->destImage->fillRect(1, 1, title->rw, title->rh, 0, 0, 0);
 
             // @TODO: animStepTarget (for this loop) should not exceed
@@ -2154,8 +2159,6 @@ bool IntroController::updateTitle()
 
         if (title->method == TITLE)
         {
-            // assume this is "Ultima IV" and pre-load sound
-//            soundLoad(SOUND_TITLE_FADE);
             xu4.eventHandler->setTimerInterval(xu4.settings->titleSpeedRandom);
         }
         else if (title->method == MAP)
@@ -2205,12 +2208,3 @@ void IntroController::skipTitles()
     bSkipTitles = true;
     soundStop();
 }
-
-#ifdef IOS
-// Try to put the intro music back at just the correct moment on iOS;
-// don't play it at the very beginning.
-void IntroController::tryTriggerIntroMusic() {
-    if (mode == INTRO_MAP)
-        musicPlay(introMusic);
-}
-#endif

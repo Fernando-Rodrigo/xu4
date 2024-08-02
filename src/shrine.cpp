@@ -33,7 +33,7 @@ bool shrineCanEnter(const Portal *p) {
 }
 
 const char* Shrine::getName() const {
-    string& str = c->shrineState.shrineName;
+    std::string& str = c->shrineState.shrineName;
     str = "Shrine of ";
     str += getVirtueName(virtue);
     return str.c_str();
@@ -47,7 +47,7 @@ const char* Shrine::mantraStr() const {
  * Enter the shrine
  */
 void Shrine::enter() {
-    string input;
+    const char* input;
     ShrineState* ss = &c->shrineState;
     int choice;
 
@@ -75,7 +75,7 @@ void Shrine::enter() {
     U4IOS::IOSConversationHelper inputVirture;
     inputVirture.beginConversation(U4IOS::UIKeyboardTypeDefault, "Upon which virtue dost thou meditate?");
 #endif
-    input = ReadStringController::get(32, TEXT_AREA_X + c->col, TEXT_AREA_Y + c->line);
+    input = EventHandler::readString(32);
 #ifdef IOS
     }
 #endif
@@ -86,7 +86,7 @@ void Shrine::enter() {
     U4IOS::IOSConversationChoiceHelper cyclesChoice;
     cyclesChoice.updateChoices("0123 \015\033");
 #endif
-    choice = ReadChoiceController::get("0123\015\033");
+    choice = EventHandler::readChoice("0123\015\033");
 #ifdef IOS
     }
 #endif
@@ -99,7 +99,7 @@ void Shrine::enter() {
     screenMessage("\n\n");
 
     // ensure the player chose the right virtue and entered a valid number for cycles
-    if (strncasecmp(input.c_str(), getVirtueName(virtue), 6) != 0 || ss->cycles == 0) {
+    if (strncasecmp(input, getVirtueName(virtue), 6) != 0 || ss->cycles == 0) {
         screenMessage("Thou art unable to focus thy thoughts on this subject!\n");
         eject();
     }
@@ -121,7 +121,7 @@ void Shrine::enhancedSequence() {
     annotations.add(Coords(5, 6, c->location->coords.z),
             tileset->getByName(Tile::sym.grass)->getId(), false, true);
 
-    screenDisableCursor();
+    screenHideCursor();
     screenMessage("You approach\nthe ancient\nshrine...\n");
     gameUpdateScreen();
     EventHandler::wait_msecs(1000);
@@ -148,7 +148,7 @@ void Shrine::enhancedSequence() {
     screenMessage("\n...and kneel before the altar.\n");
     gameUpdateScreen();
     EventHandler::wait_msecs(1000);
-    screenEnableCursor();
+    screenShowCursor();
 }
 
 void Shrine::meditationCycle() {
@@ -159,7 +159,7 @@ void Shrine::meditationCycle() {
 
     c->saveGame->lastmeditation = (c->saveGame->moves / SHRINE_MEDITATION_INTERVAL) & 0xffff;
 
-    screenDisableCursor();
+    screenHideCursor();
     for (int i = 0; i < MEDITATION_MANTRAS_PER_CYCLE; i++) {
         screenUploadToGPU();
         if (EventHandler::wait_msecs(interval))
@@ -170,10 +170,10 @@ void Shrine::meditationCycle() {
 }
 
 void Shrine::askMantra() {
-    string input;
+    const char* input;
     ShrineState* ss = &c->shrineState;
 
-    screenEnableCursor();
+    screenShowCursor();
     screenMessage("\nMantra: ");
 
 #ifdef IOS
@@ -181,13 +181,13 @@ void Shrine::askMantra() {
     U4IOS::IOSConversationHelper mantraHelper;
     mantraHelper.beginConversation(U4IOS::UIKeyboardTypeASCIICapable, "Mantra?");
 #endif
-    input = ReadStringController::get(4, TEXT_AREA_X + c->col, TEXT_AREA_Y + c->line);
+    input = EventHandler::readString(4);
     screenMessage("\n");
 #ifdef IOS
     }
 #endif
 
-    if (strcasecmp(input.c_str(), mantraStr()) != 0) {
+    if (strcasecmp(input, mantraStr()) != 0) {
         c->party->adjustKarma(KA_BAD_MANTRA);
         screenMessage("Thou art not able to focus thy thoughts with that Mantra!\n");
         eject();
@@ -216,9 +216,9 @@ void Shrine::askMantra() {
         U4IOS::testFlightPassCheckPoint(std::string("Gained avatarhood in: ")
                                         + getVirtueName(virtue));
 #endif
-        ReadChoiceController::get("");
+        EventHandler::waitAnyKey();
         showVision(elevated);
-        ReadChoiceController::get("");
+        EventHandler::waitAnyKey();
         eject();
     }
 }

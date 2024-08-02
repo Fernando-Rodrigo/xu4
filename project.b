@@ -70,11 +70,11 @@ exe %xu4 [
 		]
 		sdl [
 			include_from %/usr/include/SDL
-			libs [%SDL %SDL_mixer]
+			libs [%SDL %faun]
 			sources_from %src [
 				%event_sdl.cpp
 				%screen_sdl.cpp
-				%sound_sdl.cpp
+				%sound_faun.cpp
 			]
 		]
 	]
@@ -156,7 +156,6 @@ exe %xu4 [
 		%maploader.cpp
 		%menu.cpp
 		%menuitem.cpp
-		%movement.cpp
 		%names.cpp
 		%object.cpp
 		%party.cpp
@@ -177,7 +176,6 @@ exe %xu4 [
 		%tileset.cpp
 		%tileview.cpp
 		%u4file.cpp
-		%unzip.c
 		%view.cpp
 		%xu4.cpp
 
@@ -189,6 +187,7 @@ exe %xu4 [
 		%support/notify.c
 		%support/stringTable.c
 		%support/txf_draw.c
+		%support/unzip.c
 	]
 ]
 

@@ -111,13 +111,12 @@ void CombatController::initCreature(const Creature *m) {
  * Initializes dungeon room combat
  */
 void CombatController::initDungeonRoom(int room, Direction from) {
-    int offset, i;
     ASSERT(c->location->prev->context & CTX_DUNGEON, "Error: called initDungeonRoom from non-dungeon context");
     {
-        Dungeon *dng = dynamic_cast<Dungeon*>(c->location->prev->map);
-        unsigned char
-            *party_x = &dng->rooms[room].party_north_start_x[0],
-            *party_y = &dng->rooms[room].party_north_start_y[0];
+        const Dungeon *dng = dynamic_cast<Dungeon*>(c->location->prev->map);
+        const DngRoom *dngRoom = dng->rooms + room;
+        const unsigned char *party_x, *party_y;
+        int offset, i;
 
         /* load the dungeon room properties */
         winOrLose = false;
@@ -125,30 +124,31 @@ void CombatController::initDungeonRoom(int room, Direction from) {
         exitDir = DIR_NONE;
 
         /* FIXME: this probably isn't right way to see if you're entering an altar room... but maybe it is */
-        if ((c->location->prev->map->id != MAP_ABYSS) && (room == 0xF)) {
+        if ((dng->id != MAP_ABYSS) && (room == 0xF)) {
             /* figure out which dungeon room they're entering */
             if (c->location->prev->coords.x == 3)
                 map->setAltarRoom(VIRT_LOVE);
             else if (c->location->prev->coords.x <= 2)
                 map->setAltarRoom(VIRT_TRUTH);
-            else map->setAltarRoom(VIRT_COURAGE);
+            else
+                map->setAltarRoom(VIRT_COURAGE);
         }
 
         /* load in creatures and creature start coordinates */
         for (i = 0; i < AREA_CREATURES; i++) {
-            if (dng->rooms[room].creature_tiles[i] > 0) {
+            if (dngRoom->creature_tiles[i] > 0) {
                 placeCreaturesOnMap = true;
-                creatureTable[i] = Creature::getByTile(dng->rooms[room].creature_tiles[i]);
+                creatureTable[i] = Creature::getByTile(dngRoom->creature_tiles[i]);
             }
-            map->creature_start[i].x = dng->rooms[room].creature_start_x[i];
-            map->creature_start[i].y = dng->rooms[room].creature_start_y[i];
+            map->creature_start[i].x = dngRoom->creature_start_x[i];
+            map->creature_start[i].y = dngRoom->creature_start_y[i];
         }
 
         /* figure out party start coordinates */
         switch(from) {
-        case DIR_WEST: offset = 3; break;
+        case DIR_WEST:  offset = 3; break;
         case DIR_NORTH: offset = 0; break;
-        case DIR_EAST: offset = 1; break;
+        case DIR_EAST:  offset = 1; break;
         case DIR_SOUTH: offset = 2; break;
         case DIR_ADVANCE:
         case DIR_RETREAT:
@@ -156,10 +156,13 @@ void CombatController::initDungeonRoom(int room, Direction from) {
             ASSERT(0, "Invalid 'from' direction passed to initDungeonRoom()");
             return;
         }
+        offset *= AREA_PLAYERS * 2;
+        party_x = dngRoom->party_north_start_x + offset;
+        party_y = dngRoom->party_north_start_y + offset;
 
         for (i = 0; i < AREA_PLAYERS; i++) {
-            map->player_start[i].x = *(party_x + (offset * AREA_PLAYERS * 2) + i);
-            map->player_start[i].y = *(party_y + (offset * AREA_PLAYERS * 2) + i);
+            map->player_start[i].x = party_x[i];
+            map->player_start[i].y = party_y[i];
         }
     }
 }
@@ -222,6 +225,9 @@ void CombatController::beginCombat() {
         c->location->turnCompleter->finishTurn();
 
     xu4.eventHandler->pushController(this);
+
+    // Mouse cannot be used in combat yet.
+    screenSetMouseCursor(MC_DEFAULT);
 }
 
 /*
@@ -316,30 +322,36 @@ void CombatController::endCombat(bool adjustKarma) {
  * *where* they are placed (by position in the table).  Information like
  * hit points and creature status will be created when the creature is actually placed
  */
-void CombatController::fillCreatureTable(const Creature *creature) {
-    int i, j;
-
-    if (creature != NULL) {
-        const Creature *baseCreature = creature, *current;
-        int numCreatures = initialNumberOfCreatures(creature);
+void CombatController::fillCreatureTable(const Creature *baseCreature) {
+    if (baseCreature) {
+        const Creature *baseLeader;
+        const Creature *grandLeader;
+        const Creature *current;
+        int numCreatures = initialNumberOfCreatures(baseCreature);
+        int i, j;
 
         if (baseCreature->getId() == PIRATE_ID)
             baseCreature = xu4.config->creature(ROGUE_ID);
+
+        baseLeader  = xu4.config->creature(baseCreature->getLeader());
+        grandLeader = xu4.config->creature(baseLeader->getLeader());
 
         for (i = 0; i < numCreatures; i++) {
             current = baseCreature;
 
             /* find a free spot in the creature table */
-            do {j = xu4_random(AREA_CREATURES) ;} while (creatureTable[j] != NULL);
+            do {
+                j = xu4_random(AREA_CREATURES);
+            } while (creatureTable[j]);
 
             /* see if creature is a leader or leader's leader */
-            if (xu4.config->creature(baseCreature->getLeader()) != baseCreature && /* leader is a different creature */
+            if (baseLeader != baseCreature && /* leader is a different creature */
                 i != (numCreatures - 1)) { /* must have at least 1 creature of type encountered */
 
                 if (xu4_random(32) == 0)       /* leader's leader */
-                    current = xu4.config->creature(xu4.config->creature(baseCreature->getLeader())->getLeader());
+                    current = grandLeader;
                 else if (xu4_random(8) == 0)   /* leader */
-                    current = xu4.config->creature(baseCreature->getLeader());
+                    current = baseLeader;
             }
 
             /* place this creature in the creature table */
@@ -353,16 +365,18 @@ void CombatController::fillCreatureTable(const Creature *creature) {
  */
 int  CombatController::initialNumberOfCreatures(const Creature *creature) const {
     int ncreatures;
-    Map *map = c->location->prev ? c->location->prev->map : c->location->map;
+    int groupSize;
+    const Location* prev = c->location->prev;
+    Map *map = prev ? prev->map : c->location->map;
 
     /* if in an unusual combat situation, generally we stick to normal encounter sizes,
        (such as encounters from sleeping in an inn, etc.) */
-    if (forceStandardEncounterSize || map->isWorldMap() || (c->location->prev && c->location->prev->context & CTX_DUNGEON)) {
+    if (forceStandardEncounterSize || map->isWorldMap() || (prev && prev->context & CTX_DUNGEON)) {
         ncreatures = xu4_random(8) + 1;
 
         if (ncreatures == 1) {
-            if (creature && creature->getEncounterSize() > 0)
-                ncreatures = xu4_random(creature->getEncounterSize()) + creature->getEncounterSize() + 1;
+            if (creature && (groupSize = creature->getEncounterSize()) > 0)
+                ncreatures = xu4_random(groupSize) + groupSize + 1;
             else
                 ncreatures = 8;
         }
@@ -446,13 +460,18 @@ void CombatController::placePartyMembers() {
         p->focused = false; // take the focus off of everyone
 
         /* don't place dead party members */
-        if (p->getStatus() != STAT_DEAD) {
+        if (! p->isDead()) {
             /* add the party member to the map */
             p->placeOnMap(map, map->player_start[i]);
             map->objects.push_back(p);
             party[i] = p;
         }
     }
+}
+
+void CombatController::announceActivePlayer() {
+    PartyMember* p = getCurrentPlayer();
+    screenMessage("\n%s with %s\n\020", p->getName(), p->getWeapon()->getName());
 }
 
 /**
@@ -468,11 +487,12 @@ bool CombatController::setActivePlayer(int player) {
         p->focused = true;
         focus = player;
 
-        screenMessage("\n%s with %s\n\020", p->getName(), p->getWeapon()->getName());
+        announceActivePlayer();
         c->stats->highlightPlayer(focus);
         return true;
     }
 
+    c->stats->highlightPlayer(-1);
     return false;
 }
 
@@ -587,7 +607,7 @@ bool CombatController::attackAt(const Coords &coords, PartyMember *attacker, int
 
         /* show the 'hit' tile */
         GameController::flashTile(coords, misstile, 1);
-        soundPlay(SOUND_NPC_STRUCK, false,-1);                                    // NPC_STRUCK, melee hit
+        soundPlay(SOUND_NPC_STRUCK);    // NPC_STRUCK, melee hit
         GameController::flashTile(coords, hittile, 3);
 
         /* apply the damage to the creature */
@@ -605,6 +625,7 @@ static bool rangedAttack(const Coords &coords, CombatMap* map,
                          Creature *attacker,
                          const MapTile& hittile, const MapTile& misstile) {
 
+    bool effective;
     Creature *target = isCreature(attacker) ? map->partyMemberAt(coords)
                                             : map->creatureAt(coords);
 
@@ -623,45 +644,65 @@ static bool rangedAttack(const Coords &coords, CombatMap* map,
     /* show the 'hit' tile */
     GameController::flashTile(coords, hittile, 3);
 
+#define EFFECT_MSG(fmt, color) screenMessage(fmt, target->getName(), color, FG_WHITE)
+
     /* These effects happen whether or not the opponent was hit */
     switch(effect) {
 
     case EFFECT_ELECTRICITY:
         /* FIXME: are there any special effects here? */
-        soundPlay(SOUND_PC_STRUCK, false);
-        screenMessage("\n%s %cElectrified%c!\n", target->getName(), FG_BLUE, FG_WHITE);
+        soundPlay(SOUND_PC_STRUCK);
+        EFFECT_MSG("\n%s %cElectrified%c!\n", FG_BLUE);
         attacker->dealDamage(map, target, attacker->getDamage());
         break;
 
     case EFFECT_POISON:
     case EFFECT_POISONFIELD:
+        // POISON_EFFECT, ranged hit
+        soundPlay(SOUND_POISON_EFFECT);
+
         /* see if the player is poisoned */
-        if ((xu4_random(2) == 0) && (target->getStatus() != STAT_POISONED))
-        {
-            // POISON_EFFECT, ranged hit
-            soundPlay(SOUND_POISON_EFFECT, false);
-            screenMessage("\n%s %cPoisoned%c!\n", target->getName(), FG_GREEN, FG_WHITE);
+        effective = (target->getStatus() == STAT_GOOD && xu4_random(2) == 0);
+
+#ifdef U4_ORIGINAL
+        EFFECT_MSG("\n%s %cPoisoned%c!\n", FG_GREEN);
+        if (effective)
+            target->addStatus(STAT_POISONED);
+        else
+            screenMessage("Failed.\n");
+#else
+        if (effective) {
+            EFFECT_MSG("\n%s %cPoisoned%c!\n", FG_GREEN);
             target->addStatus(STAT_POISONED);
         }
-        // else screenMessage("Failed.\n");
+#endif
         break;
 
     case EFFECT_SLEEP:
+        // SLEEP, ranged hit, plays even if sleep failed or PC already asleep
+        soundPlay(SOUND_SLEEP);
+
         /* see if the player is put to sleep */
-        if (xu4_random(2) == 0)
-        {
-            // SLEEP, ranged hit, plays even if sleep failed or PC already asleep
-            soundPlay(SOUND_SLEEP, false);
-            screenMessage("\n%s %cSlept%c!\n", target->getName(), FG_PURPLE, FG_WHITE);
+        effective = (target->getStatus() == STAT_GOOD && xu4_random(2) == 0);
+
+#ifdef U4_ORIGINAL
+        EFFECT_MSG("\n%s %cSlept%c!\n", FG_PURPLE);
+        if (effective)
+            target->putToSleep();
+        else
+            screenMessage("Failed.\n");
+#else
+        if (effective) {
+            EFFECT_MSG("\n%s %cSlept%c!\n", FG_PURPLE);
             target->putToSleep();
         }
-        // else screenMessage("Failed.\n");
+#endif
         break;
 
     case EFFECT_LAVA:
     case EFFECT_FIRE:
         /* FIXME: are there any special effects here? */
-        soundPlay(SOUND_PC_STRUCK, false);
+        soundPlay(SOUND_PC_STRUCK);
         screenMessage("\n%s %c%s Hit%c!\n", target->getName(), FG_RED,
                       effect == EFFECT_LAVA ? "Lava" : "Fiery", FG_WHITE);
         attacker->dealDamage(map, target, attacker->getDamage());
@@ -669,13 +710,19 @@ static bool rangedAttack(const Coords &coords, CombatMap* map,
 
     default:
         /* show the appropriate 'hit' message */
-        // soundPlay(SOUND_PC_STRUCK, false);
+        soundPlay(SOUND_PC_STRUCK);
         if (hittile == Tileset::findTileByName(Tile::sym.magicFlash)->getId())
-            screenMessage("\n%s %cMagical Hit%c!\n", target->getName(), FG_BLUE, FG_WHITE);
-        else screenMessage("\n%s Hit!\n", target->getName());
+            EFFECT_MSG("\n%s %cMagical Hit%c!\n", FG_BLUE);
+        else
+            screenMessage("\n%s Hit!\n", target->getName());
         attacker->dealDamage(map, target, attacker->getDamage());
         break;
     }
+
+    int player = c->party->memberIndex(target);
+    if (player >= 0)
+        c->stats->flashPlayers(1 << player);
+
     GameController::flashTile(coords, hittile, 1);
     return true;
 }
@@ -726,6 +773,7 @@ void CombatController::finishTurn() {
 
     /* return to party overview */
     c->stats->setView(STATS_PARTY_OVERVIEW);
+    c->stats->highlightPlayer(-1);
 
     if (isWon() && winOrLose) {
         endCombat(true);
@@ -737,7 +785,8 @@ void CombatController::finishTurn() {
     /* make sure the player with the focus is still in battle (hasn't fled or died) */
     if (player) {
         /* apply effects from tile player is standing on */
-        player->applyEffect(map, map->tileTypeAt(player->coords, WITH_GROUND_OBJECTS)->getEffect());
+        c->party->applyEffect(focus, map,
+            map->tileTypeAt(player->coords, WITH_GROUND_OBJECTS)->getEffect());
     }
 
     quick = (c->aura.getType() == Aura::QUICKNESS) && player && (xu4_random(2) == 0) ? 1 : 0;
@@ -883,11 +932,9 @@ bool CombatController::keyPressed(int key) {
         c->location->move(keyToDirection(key), true);
         break;
 
-    case U4_ESC:
+    case 5:         /* ctrl-E */
         if (settings.debug)
             endCombat(false);   /* don't adjust karma */
-        else
-            gameBadCommand();
         break;
 
     case ' ':
@@ -1016,7 +1063,7 @@ bool CombatController::keyPressed(int key) {
 #ifdef IOS
         U4IOS::IOSConversationHelper::setIntroString("Use which item?");
 #endif
-        itemUse(gameGetInput().c_str());
+        itemUse(gameGetInput());
         break;
 
     case 'v':
@@ -1079,13 +1126,15 @@ bool CombatController::keyPressed(int key) {
     case '9':
         if (settings.enhancements && settings.enhancementsOptions.activePlayer)
             gameSetActivePlayer(key - '1');
-        else
+        else {
             gameBadCommand();
+            announceActivePlayer();
+            endTurn = false;
+        }
         break;
 
     default:
-        valid = false;
-        break;
+        return EventHandler::defaultKeyHandler(key);
     }
 
     if (valid) {
@@ -1103,12 +1152,7 @@ bool CombatController::keyPressed(int key) {
 void CombatController::attack() {
     screenMessage("Dir: ");
 
-    ReadDirController dirController;
-#ifdef IOS
-    U4IOS::IOSDirectionHelper directionPopup;
-#endif
-    xu4.eventHandler->pushController(&dirController);
-    Direction dir = dirController.waitFor();
+    Direction dir = EventHandler::readDir();
     if (dir == DIR_NONE)
         return;
     screenMessage("%s\n", getDirectionName(dir));
@@ -1119,7 +1163,7 @@ void CombatController::attack() {
     int range = weapon->range;
     if (weapon->canChooseDistance()) {
         screenMessage("Range: ");
-        range = ReadChoiceController::get("123456789") - '0';
+        range = EventHandler::readChoice("123456789") - '0';
         if (range < 1 || range > weapon->range)
             return;
         screenMessage("%d\n", range);
@@ -1127,7 +1171,7 @@ void CombatController::attack() {
 
     // the attack was already made, even if there is no valid target
     // so play the attack sound
-    soundPlay(SOUND_PC_ATTACK, false);
+    soundPlay(SOUND_PC_ATTACK);
 
 
     vector<Coords> path =
@@ -1178,7 +1222,7 @@ void CombatController::attack() {
             break;
         case AR_Hit:
             GameController::flashTile(targetCoords, missTile, 1);
-            soundPlay(SOUND_NPC_STRUCK, false, -1);
+            soundPlay(SOUND_NPC_STRUCK);
 
             MapTile hitTile = map->tileset->getByName(weapon->hitTile)->getId();
             GameController::flashTile(targetCoords, hitTile, 3);
@@ -1335,40 +1379,42 @@ static const uint8_t combatMapId[21] = {
     MAP_GRASS_CON,  // dungeon_floor
 };
 
+static void _relateMapsToTiles(std::map<const Tile*, MapId>& tmap,
+                               const uint8_t* mapIds, int count,
+                               const Symbol* tileNames)
+{
+    const Tileset* ts = xu4.config->tileset();
+    for (int i = 0; i < count; ++i)
+        tmap[ ts->getByName(tileNames[i]) ] = mapIds[i];
+}
+
 /**
  * Returns a valid combat map given the provided information
  */
-MapId CombatMap::mapForTile(const Tile *groundTile, const Tile *transport, Object *obj) {
-    static std::map<const Tile *, MapId> tileMap;
-    static std::map<const Tile *, MapId> dungeontileMap;
+MapId GameController::combatMapForTile(const Tile *groundTile, Object *obj) {
     bool fromShip, toShip;
     Location* loc = c->location;
-    const Object *objUnder = loc->map->objectAt(loc->coords);
 
     if (loc->context & CTX_DUNGEON) {
-        if (dungeontileMap.empty()) {
-            const Tileset* ts = xu4.config->tileset();
-            for (size_t i = 0; i < sizeof(dungeonMapId); ++i) {
-                dungeontileMap[ ts->getByName(Tile::sym.dungeonMaps[i]) ] =
-                    dungeonMapId[i];
-            }
-        }
+        if (dungeontileMap.empty())
+            _relateMapsToTiles(dungeontileMap,
+                               dungeonMapId, sizeof(dungeonMapId),
+                               Tile::sym.dungeonMaps);
 
-        if (dungeontileMap.find(groundTile) != dungeontileMap.end())
-            return dungeontileMap[groundTile];
-
+        auto it = dungeontileMap.find(groundTile);
+        if (it != dungeontileMap.end())
+            return it->second;
         return MAP_DNG0_CON;
     }
 
-    if (tileMap.empty()) {
-        const Tileset* ts = xu4.config->tileset();
-        for (size_t i = 0; i < sizeof(combatMapId); ++i)
-            tileMap[ ts->getByName(Tile::sym.combatMaps[i]) ] = combatMapId[i];
-    }
-
     fromShip = toShip = false;
-    if (transport->isShip() || (objUnder && objUnder->tile.getTileType()->isShip()))
+    if (c->transportContext == TRANSPORT_SHIP)
         fromShip = true;
+    else {
+        const Object* objUnder = loc->map->objectAt(loc->coords);
+        if (objUnder && objUnder->tile.getTileType()->isShip())
+            fromShip = true;
+    }
     if (obj->tile.getTileType()->isPirateShip())
         toShip = true;
 
@@ -1389,8 +1435,12 @@ MapId CombatMap::mapForTile(const Tile *groundTile, const Tile *transport, Objec
             return MAP_SHIPSHOR_CON;
     }
 
-    if (tileMap.find(groundTile) != tileMap.end())
-        return tileMap[groundTile];
+    if (tileMap.empty())
+        _relateMapsToTiles(tileMap, combatMapId, sizeof(combatMapId),
+                           Tile::sym.combatMaps);
 
+    auto it = tileMap.find(groundTile);
+    if (it != tileMap.end())
+        return it->second;
     return MAP_BRICK_CON;
 }

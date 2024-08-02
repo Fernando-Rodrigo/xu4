@@ -13,8 +13,8 @@
 #include "tile.h"
 
 enum GLObject {
-    GLOB_GUI_LIST0,     // GPU_DLIST_GUI
-    GLOB_GUI_LIST1,
+    GLOB_GUI_LIST,      // GPU_DLIST_GUI (single-buffered)
+    GLOB_QUAD,          // No DrawList
     GLOB_HUD_LIST0,     // GPU_DLIST_HUD
     GLOB_HUD_LIST1,
 #ifdef GPU_RENDER
@@ -29,7 +29,6 @@ enum GLObject {
     GLOB_MAP_CHUNK2,
     GLOB_MAP_CHUNK3,
 #endif
-    GLOB_QUAD,
     GLOB_COUNT
 };
 
@@ -42,7 +41,9 @@ enum GLTextureUnit {
 };
 
 struct DrawList {
-    int     buf;        // GLObject vbo index toggle.
+    uint16_t bufI;      // GLObject vbo/vao index toggle.
+    uint8_t  dual;      // Double-buffered.
+    uint8_t  fpv;       // Floats per vertex.
     int     byteSize;
     GLsizei count;      // Number of floats.
 };
@@ -74,8 +75,6 @@ struct OpenGLResources {
     GLuint scaler;
     GLint  slocScMat;
     GLint  slocScDim;
-    GLint  slocScTex;
-    GLint  slocScLut;
 
     GLuint shadeColor;
     GLint  slocTrans;
@@ -87,7 +86,8 @@ struct OpenGLResources {
 
     GLuint shadeGlyph;
     GLint  glyphTrans;
-    GLint  glyphBg;
+    GLint  glyphOrigin;
+    GLint  glyphWidget;
     GLint  glyphFg;
 
 #ifdef GPU_RENDER

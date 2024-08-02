@@ -63,8 +63,6 @@
 #define BKGD_GEMTILES       ImageMgr::sym.gemtiles
 #define IMG_MOONGATE        ImageMgr::sym.moongate
 #define IMG_ITEMS           ImageMgr::sym.items
-#define IMG_BLACKBEAD       ImageMgr::sym.blackbead
-#define IMG_WHITEBEAD       ImageMgr::sym.whitebead
 
 struct ImageSymbols {
     Symbol tiles;
@@ -118,8 +116,6 @@ struct ImageSymbols {
     Symbol gemtiles;
     Symbol moongate;
     Symbol items;
-    Symbol blackbead;
-    Symbol whitebead;
 };
 
 enum AtlasEditOpcode {
@@ -197,11 +193,11 @@ public:
     ImageInfo* imageInfo(Symbol name, const SubImage** subPtr);
     ImageInfo* get(Symbol name);
 
-    uint16_t setResourceGroup(uint16_t group);
     void freeResourceGroup(uint16_t group);
 
     const RGBA* vgaPalette();
     const RGBA* greyPalette();
+    bool usingVGA() const { return vgaGraphics; }
 
 private:
     static void notice(int, void*, void*);
@@ -220,7 +216,7 @@ private:
     RGBA* vgaColors;
     RGBA* greyColors;
     uint8_t* visionBuf;
-    uint16_t resGroup;
+    bool vgaGraphics;
 };
 
 #endif /* IMAGEMGR_H */

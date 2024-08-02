@@ -37,6 +37,7 @@ CampController::CampController() {
 
 void CampController::beginCombat() {
     // make sure everyone's asleep
+    // NOTE: Player status are set to sleeping, unlike in the C64/DOS games.
     for (int i = 0; i < c->party->size(); i++)
         c->party->member(i)->putToSleep();
 
@@ -45,12 +46,12 @@ void CampController::beginCombat() {
     musicFadeOut(1000);
 
     screenMessage("Resting...\n");
-    screenDisableCursor();
+    screenHideCursor();
 
     if (EventHandler::wait_msecs(xu4.settings->campTime * 1000))
         return;
 
-    screenEnableCursor();
+    screenShowCursor();
 
     /* Is the party ambushed during their rest? */
     if (xu4.settings->campingAlwaysCombat || (xu4_random(8) == 0)) {
@@ -77,7 +78,7 @@ void CampController::beginCombat() {
         /* Make sure we've waited long enough for camping to be effective */
         bool healed = false;
         if (((c->saveGame->moves / CAMP_HEAL_INTERVAL) >= 0x10000) || (((c->saveGame->moves / CAMP_HEAL_INTERVAL) & 0xffff) != c->saveGame->lastcamp))
-            healed = heal();
+            healed = c->party->applyRest(HT_CAMPHEAL);
 
         screenMessage(healed ? "Party Healed!\n" : "No effect.\n");
         c->saveGame->lastcamp = (c->saveGame->moves / CAMP_HEAL_INTERVAL) & 0xffff;
@@ -93,19 +94,6 @@ void CampController::endCombat(bool adjustKarma) {
     for (int i = 0; i < c->party->size(); i++)
         c->party->member(i)->wakeUp();
     CombatController::endCombat(adjustKarma);
-}
-
-bool CampController::heal() {
-    // restore each party member to max mp, and restore some hp
-    bool healed = false;
-    for (int i = 0; i < c->party->size(); i++) {
-        PartyMember *m = c->party->member(i);
-        m->setMp(m->getMaxMp());
-        if ((m->getHp() < m->getMaxHp()) && m->heal(HT_CAMPHEAL))
-            healed = true;
-    }
-
-    return healed;
 }
 
 InnController::InnController() {
@@ -131,19 +119,19 @@ void InnController::beginCombat() {
     c->party->setTransport(ts->getByName(Tile::sym.corpse)->getId());
     gameUpdateScreen();
 
-    screenDisableCursor();
+    screenHideCursor();
 
     if (EventHandler::wait_msecs(xu4.settings->innTime * 1000))
         return;
 
-    screenEnableCursor();
+    screenShowCursor();
 
     /* restore the avatar to normal */
     c->party->setTransport(ts->getByName(Tile::sym.avatar)->getId());
     gameUpdateScreen();
 
     /* the party is always healed */
-    heal();
+    c->party->applyRest(HT_INNHEAL);
 
     /* Is there a special encounter during your stay? */
     // mwinterrowd suggested code, based on u4dos
@@ -164,20 +152,6 @@ void InnController::beginCombat() {
 
     musicFadeIn(INN_FADE_IN_TIME, true);
 }
-
-bool InnController::heal() {
-    // restore each party member to max mp, and restore some hp
-    bool healed = false;
-    for (int i = 0; i < c->party->size(); i++) {
-        PartyMember *m = c->party->member(i);
-        m->setMp(m->getMaxMp());
-        if ((m->getHp() < m->getMaxHp()) && m->heal(HT_INNHEAL))
-            healed = true;
-    }
-
-    return healed;
-}
-
 
 void InnController::maybeMeetIsaac()
 {

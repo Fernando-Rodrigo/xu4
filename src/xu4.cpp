@@ -13,10 +13,10 @@
 #include <ctime>
 #include "xu4.h"
 #include "config.h"
-#include "debug.h"
 #include "error.h"
 #include "game.h"
 #include "gamebrowser.h"
+#include "imagemgr.h"
 #include "intro.h"
 #include "progress_bar.h"
 #include "screen.h"
@@ -32,7 +32,7 @@ extern "C" const char* androidInternalData();
 #include "macosx/osxinit.h"
 #endif
 
-#if defined(_WIN32) && defined(DEBUG)
+#ifdef _WIN32
 #include "win32console.c"
 #endif
 
@@ -61,8 +61,9 @@ enum OptionsFlag {
     OPT_NO_INTRO   = 2,
     OPT_NO_AUDIO   = 4,
     OPT_VERBOSE    = 8,
-    OPT_RECORD     = 0x10,
-    OPT_REPLAY     = 0x20,
+    OPT_FILTER     = 0x10,
+    OPT_RECORD     = 0x20,
+    OPT_REPLAY     = 0x40,
     OPT_TEST_SAVE  = 0x80
 };
 
@@ -90,6 +91,7 @@ int parseOptions(Options* opt, int argc, char** argv) {
             if (++i >= argc)
                 goto missing_value;
             opt->filter = Settings::settingEnum(screenGetFilterNames(),argv[i]);
+            opt->used |= OPT_FILTER;
         }
         else if (strEqualAlt(argv[i], "-s", "--scale"))
         {
@@ -138,7 +140,7 @@ int parseOptions(Options* opt, int argc, char** argv) {
             printf(
             "Options:\n"
             "      --filter <string>   Specify display filtering mode.\n"
-            "                          (point, HQX, xBR-lv2)\n"
+            "                          (point, HQX, xBR-lv2, xBRZ)\n"
             "  -f, --fullscreen        Run in fullscreen mode.\n"
             "  -h, --help              Print this message and quit.\n"
             "  -i, --skip-intro        Skip the intro. and load the last saved game.\n"
@@ -256,10 +258,8 @@ void servicesInit(XU4GameServices* gs, Options* opt) {
         gs->settings->fullscreen = (opt->flags & OPT_FULLSCREEN) ? true : false;
     if (opt->scale)
         gs->settings->scale = opt->scale;
-    if (opt->filter)
+    if (opt->used & OPT_FILTER)
         gs->settings->filter = opt->filter;
-
-    Debug::initGlobal("debug/global.txt");
 
     gs->config = configInit(opt->module ? opt->module : gs->settings->game,
                             gs->settings->soundtrack);
@@ -356,7 +356,7 @@ int main(int argc, char *argv[]) {
 #if defined(MACOSX)
     osxInit(argv[0]);
 #endif
-#if defined(_WIN32) && defined(DEBUG)
+#ifdef _WIN32
     redirectIOToConsole();
 #endif
     //printf("sizeof(Tile) %ld\n", sizeof(Tile));
@@ -433,6 +433,24 @@ void xu4_selectGame() {
     if (! xu4.gameBrowser)
         xu4.gameBrowser = new GameBrowser;
     xu4.eventHandler->runController(xu4.gameBrowser);
+}
+
+/**
+ * Set the group that loaded assets will belong to.
+ * Return the previously set group.
+ */
+uint16_t xu4_setResourceGroup(uint16_t group) {
+    uint16_t prev = xu4.resGroup;
+    xu4.resGroup = group;
+    return prev;
+}
+
+/**
+ * Free all assets that are part of the specified group.
+ */
+void xu4_freeResourceGroup(uint16_t group) {
+    xu4.imageMgr->freeResourceGroup(group);
+    soundFreeResourceGroup(group);
 }
 
 //----------------------------------------------------------------------------

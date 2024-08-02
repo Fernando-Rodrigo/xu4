@@ -16,8 +16,6 @@
 #include "utils.h"
 #include "xu4.h"
 
-SpellEffectCallback spellEffectCallback = NULL;
-
 CombatController *spellCombatController();
 bool spellMagicAttackAt(const Coords &coords, MapTile attackTile, int attackDamage);
 
@@ -63,8 +61,8 @@ static const struct {
     SpellCastError err;
     const char *msg;
 } spellErrorMsgs[] = {
-    { CASTERR_NOMIX, "None Mixed!\n" },
-    { CASTERR_MPTOOLOW, "Not Enough MP!\n" },
+    { CASTERR_NOMIX, "None Mixed!\n" },         // DOS: "None left!"
+    { CASTERR_MPTOOLOW, "Not Enough MP!\n" },   // DOS: "M.P. too low!"
     { CASTERR_FAILED, "Failed!\n" },
     { CASTERR_WRONGCONTEXT, "Not here!\n" },
     { CASTERR_COMBATONLY, "Combat only!\nFailed!\n" },
@@ -107,10 +105,6 @@ static const Spell spells[] = {
 };
 
 #define N_SPELLS (sizeof(spells) / sizeof(spells[0]))
-
-void spellSetEffectCallback(SpellEffectCallback callback) {
-    spellEffectCallback = callback;
-}
 
 Ingredients::Ingredients() {
     memset(reagents, 0, sizeof(reagents));
@@ -272,7 +266,7 @@ SpellCastError spellCheckPrerequisites(unsigned int spell, int character) {
  * Casts spell.  Fails and returns false if the spell cannot be cast.
  * The error code is updated with the reason for failure.
  */
-bool spellCast(unsigned int spell, int character, int param, SpellCastError *error, bool spellEffect) {
+bool spellCast(unsigned int spell, int character, int param, SpellCastError *error, bool spellCastEffect) {
     int subject = (spells[spell].paramType == Spell::PARAM_PLAYER) ? param : -1;
     PartyMember *p = c->party->member(character);
 
@@ -284,36 +278,36 @@ bool spellCast(unsigned int spell, int character, int param, SpellCastError *err
     // subtract the mixture for even trying to cast the spell
     AdjustValueMin(c->saveGame->mixtures[spell], -1, 0);
 
-    if (*error != CASTERR_NOERROR)
-        return false;
+    if (*error != CASTERR_NOERROR) {
+        // _NOMIX is silent; all other errors play sound.
+        if (*error == CASTERR_NOMIX)
+            return false;
+        goto failed;
+    }
 
     // If there's a negate magic aura, spells fail!
     if (c->aura.getType() == Aura::NEGATE) {
         *error = CASTERR_FAILED;
-        return false;
+        goto failed;
     }
 
     // subtract the mp needed for the spell
     p->adjustMp(-spells[spell].mp);
 
-    if (spellEffect) {
-        int time;
-        /* recalculate spell speed - based on 5/sec */
-        float MP_OF_LARGEST_SPELL = 45;
-        int spellMp = spells[spell].mp;
-        time = int(10000.0 / xu4.settings->spellEffectSpeed  *  spellMp / MP_OF_LARGEST_SPELL);
-        soundPlay(SOUND_PREMAGIC_MANA_JUMBLE, false, time);
-        EventHandler::wait_msecs(time);
-
-        (*spellEffectCallback)(spell + 'a', subject, SOUND_MAGIC);
-    }
+    if (spellCastEffect)
+        xu4.game->spellCastCallback(spell + 'a', character, subject,
+                                    spells[spell].mp);
 
     if (!(*spells[spell].spellFunc)(param)) {
         *error = CASTERR_FAILED;
-        return false;
+        goto failed;
     }
 
     return true;
+
+failed:
+    soundPlay(SOUND_EVADE);
+    return false;
 }
 
 CombatController *spellCombatController() {
@@ -631,7 +625,7 @@ static int spellSleep(int unused) {
         if ((m->getResists() != EFFECT_SLEEP) &&
             xu4_random(0xFF) >= m->getHp())
         {
-            soundPlay(SOUND_POISON_EFFECT);
+            soundPlay(SOUND_SLEEP);
             m->putToSleep();
             GameController::flashTile(coords, SYM_SLEEP_FIELD, 3);
         }

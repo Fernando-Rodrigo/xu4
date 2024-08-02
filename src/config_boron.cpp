@@ -56,16 +56,6 @@ enum ConfigValues
 
 Config::~Config() {}
 
-#if 0
-// For future expansion...
-const char** Config::getGames() {
-    return &"Ultima IV";
-}
-
-void Config::setGame(const char* name) {
-}
-#endif
-
 //--------------------------------------
 
 #define TALK_CACHE_SIZE 2
@@ -123,6 +113,7 @@ struct ConfigBoron : public Config {
     Module mod;
     UIndex configN;
     UIndex itemIdN;         // item-id context!
+    int voiceI;             // voice value index
     UIndex musicN;          // music parts block!
     size_t tocUsed;
     ConfigData xcd;
@@ -182,6 +173,7 @@ const UBuffer* ConfigBoron::blockBuffer(int value, uint32_t n, int dataType) con
 #define STRING_NONE (UT_BI_COUNT + UT_STRING)
 #define FILE_NONE   (UT_BI_COUNT + UT_FILE)
 #define BLOCK_NONE  (UT_BI_COUNT + UT_BLOCK)
+#define STRING_FILE (0x80 + UT_STRING)
 
 static bool validParam(const UBlockIt& bi, int count, const uint8_t* dtype)
 {
@@ -195,8 +187,13 @@ static bool validParam(const UBlockIt& bi, int count, const uint8_t* dtype)
         req  = dtype[i];
 
         if (req > UT_BI_COUNT) {
-            if (type == UT_NONE || type == (req - UT_BI_COUNT))
-                continue;
+            if (req == STRING_FILE) {
+                if (type == UT_STRING || type == UT_FILE)
+                    continue;
+            } else {
+                if (type == UT_NONE || type == (req - UT_BI_COUNT))
+                    continue;
+            }
             return false;
         }
         if (type != req)
@@ -318,7 +315,7 @@ static Tile* conf_tile(ConfigBoron* cfg, Tile* tile, int id, UBlockIt& bi)
     if (ur_is(cell, UT_WORD))
         tile->imageName = ur_atom(cell);
     else {
-        string tname("tile_");
+        std::string tname("tile_");
         tname += ur_atomCStr(cfg->ut, tile->name);
         tile->imageName = ur_intern(cfg->ut, tname.c_str(), tname.size());
     }
@@ -409,7 +406,7 @@ static void conf_initCity(ConfigBoron* cfg, City* city, UBlockIt& bi)
 {
     static const uint8_t cityParam[4] = {
         // name  type  tlk_fname  roles
-        UT_STRING, UT_WORD, UT_FILE, BLOCK_NONE
+        UT_STRING, UT_WORD, STRING_FILE, BLOCK_NONE
     };
     if (! validParam(bi, sizeof(cityParam), cityParam))
         errorFatal("Invalid city parameters");
@@ -1122,6 +1119,9 @@ ConfigBoron::ConfigBoron(const char* renderPath, const char* modulePath,
     if (ur_is(cell, UT_BLOCK)) {
         itemIdN = script_init(ut, cell);
         ur_setId(cell, UT_NONE);    // Let block be recycled.
+
+        UAtom voice = ur_intern(ut, "voice", 5);
+        voiceI = ur_ctxAddWordI(ur_threadContext(ut), voice);
     }
     }
 }
@@ -1157,24 +1157,102 @@ ConfigBoron::~ConfigBoron()
 
 extern "C" int u4find_pathc(const char*, const char*, char*, size_t);
 
+static int findModule(const char* name, char* path, size_t pathMax) {
+    int len = strlen(name) - 4;
+    const char* ext =
+        (len > 0 && strcmp(name + len, ".mod") == 0) ? "" : ".mod";
+    return u4find_pathc(name, ext, path, pathMax);
+}
+
 // Create Config service.
 Config* configInit(const char* module, const char* soundtrack) {
-    const char* ext;
+    int renderFound, stFound;
     char rpath[512];
     char mpath[512];
+    char spath[512];
 
-    int renderFound = u4find_pathc("render.pak", "", rpath, sizeof(rpath));
+    renderFound = u4find_pathc("render.pak", "", rpath, sizeof(rpath));
 
-    int len = strlen(module) - 4;
-    ext = (len > 0 && strcmp(module + len, ".mod") == 0) ? "" : ".mod";
-    if (! u4find_pathc(module, ext, mpath, sizeof(mpath)))
+    if (! findModule(module, mpath, sizeof(mpath)))
         errorFatal("Cannot find module %s", module);
 
-    return new ConfigBoron(renderFound ? rpath : NULL, mpath, soundtrack);
+    stFound = 0;
+    if (soundtrack && soundtrack[0] != '\0') {
+        stFound = findModule(soundtrack, spath, sizeof(spath));
+        if (! stFound)
+            errorWarning("Cannot find module %s", soundtrack);
+    }
+
+    return new ConfigBoron(renderFound ? rpath : NULL, mpath,
+                           stFound ? spath : NULL);
 }
 
 void configFree(Config* conf) {
     delete conf;
+}
+
+/*
+ * Convert module file to game title in provided buffer of size MOD_NAME_LIMIT.
+ * Returns buf.
+ */
+char* Config::gameTitle(char* buf) const {
+    const Module& mod = CX->mod;
+    const char* in;
+    const char* inEnd;
+    char* out = buf;
+    int len, ch, layer;
+
+    // Find extension (or base) layer.
+    for (layer = mod.modulePaths.used - 1; layer >= 0; --layer) {
+        ch = mod.category[layer];
+        if (ch == MOD_EXTENSION || ch == MOD_BASE)
+            break;
+    }
+    if (layer < 0)
+        goto none;
+
+    in = sst_stringL(&mod.modulePaths, layer, &len);
+    inEnd = in + len;
+
+    // Find start of filename (exclude directories).
+    for (const char* cp = inEnd; cp != in; ) {
+        ch = *--cp;
+        if (ch == '/' || ch == '\\') {
+            in = cp + 1;
+            break;
+        }
+    }
+
+    // Convert dash & underbar to spaces, drop ".mod" extension.
+    while (in != inEnd) {
+        ch = *in++;
+        if (ch == '.')
+            break;
+        *out++ = (ch == '-' || ch == '_') ? ' ' : ch;
+    }
+none:
+    *out = '\0';
+    return buf;
+}
+
+void Config::changeSoundtrack(const char* modName) {
+    Module& mod = static_cast<ConfigBoron*>(this)->mod;
+    int layer = mod.modulePaths.used - 1;
+
+    if (mod.category[layer] == MOD_SOUNDTRACK)
+        mod_removeLayer(&mod);
+
+    if (modName && modName[0] != '\0') {
+        char spath[512];
+        const char* error;
+
+        if (findModule(modName, spath, sizeof(spath)))
+            modName = spath;
+
+        error = mod_addLayer(&mod, modName, NULL, NULL, NULL);
+        if (error)
+            fprintf(stderr, "%s (%s)\n", error, modName);
+    }
 }
 
 const char* Config::symbolName( Symbol s ) const {
@@ -1459,8 +1537,8 @@ Map* Config::map(uint32_t id) {
     /* if the map hasn't been loaded yet, load it! */
     if (! rmap->data) {
         if (! loadMap(rmap, NULL))
-            errorFatal("loadMap failed to read \"%s\" (type %d)",
-                       confString(rmap->fname), rmap->type);
+            errorFatal("loadMap failed to read map #%d (type %d)",
+                       rmap->id, rmap->type);
     }
     return rmap;
 }
@@ -1476,7 +1554,7 @@ Map* Config::restoreMap(uint32_t id) {
         bool ok;
 
         if (rmap->type == Map::DUNGEON) {
-            string path(xu4.settings->getUserPath() + DNGMAP_SAV);
+            std::string path(xu4.settings->getUserPath() + DNGMAP_SAV);
             sav = fopen(path.c_str(), "rb");
         }
         ok = loadMap(rmap, sav);
@@ -1561,9 +1639,14 @@ static ImageInfo* loadImageInfo(const ConfigBoron* cfg, UBlockIt& bi) {
 
 #if 0
     UThread* ut = cfg->ut;
-    UBuffer* str = ur_buffer(bi.it[1].series.buf);
-    uint8_t* cp = str->ptr.b;
-    printf("KR image 0x%02x%02x%02x%02x\n", cp[0], cp[1], cp[2], cp[3]);
+    printf("KR image %s ", ur_atomCStr(ut, ur_atom(bi.it)));
+    if (isAtlas)
+        printf("atlas\n");
+    else {
+        UBuffer* str = ur_buffer(bi.it[1].series.buf);
+        uint8_t* cp = str->ptr.b;
+        printf("0x%02x%02x%02x%02x\n", cp[0], cp[1], cp[2], cp[3]);
+    }
 #endif
 
     ImageInfo* info = new ImageInfo;

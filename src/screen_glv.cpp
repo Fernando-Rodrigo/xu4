@@ -27,6 +27,7 @@ struct ScreenGLView {
     Controller* waitCon;
     updateScreenCallback update;
     int currentCursor;
+    bool cursorShown;
     OpenGLResources gpu;
 };
 
@@ -135,6 +136,9 @@ static void handleKeyDownEvent(const GLViewEvent* event,
         case KEY_Delete:
             key = U4_BACKSPACE;
             break;
+        case KEY_Pause:
+            key = U4_PAUSE;
+            break;
         default:
             if (keycode >= KEY_F1 && keycode <= KEY_F12)
                 key = U4_FKEY + (keycode - KEY_F1);
@@ -193,7 +197,7 @@ static void eventHandler(GLView* view, GLViewEvent* event)
 #endif
 
         case GLV_EVENT_BUTTON_DOWN:
-            ie.type = CIE_MOUSE_PRESS;
+            ie.type = IE_MOUSE_PRESS;
 mouse_button:
             // GLV button order matches ControllerMouseButton.
             ie.n = event->code;
@@ -207,29 +211,21 @@ mouse_pos:
             break;
 
         case GLV_EVENT_BUTTON_UP:
-            ie.type = CIE_MOUSE_RELEASE;
+            ie.type = IE_MOUSE_RELEASE;
             goto mouse_button;
 
         case GLV_EVENT_MOTION:
-            ie.type = CIE_MOUSE_MOVE;
+            ie.type = IE_MOUSE_MOVE;
             goto mouse_pos;
 
         case GLV_EVENT_WHEEL:
             ie.n = 0;
-            ie.type = CIE_MOUSE_WHEEL;
+            ie.type = IE_MOUSE_WHEEL;
             goto mouse_pos;
 
-        /*
         case GLV_EVENT_EXPOSE:
-            if (event.active.state & SDL_APPACTIVE) {
-                // Window was previously iconified and is now being restored
-                if (event.active.gain) {
-                    if (updateScreen)
-                        (*updateScreen)();
-                }
-            }
+            xu4.eventHandler->expose();
             break;
-        */
 
         case GLV_EVENT_CLOSE:
             xu4.eventHandler->quitGame();
@@ -261,8 +257,13 @@ void screenInit_sys(const Settings* settings, ScreenState* state, int reset) {
     int dh = U4_SCREEN_H * scale;
 #ifdef ANDROID
     const int glVersion = 0x301;
+    const int attrib = GLV_ATTRIB_DOUBLEBUFFER;
+#elif defined(USE_GLES)
+    const int glVersion = 0x301;
+    const int attrib = GLV_ATTRIB_DOUBLEBUFFER | GLV_ATTRIB_ES;
 #else
     const int glVersion = 0x303;
+    const int attrib = GLV_ATTRIB_DOUBLEBUFFER;
 #endif
 
     if (reset) {
@@ -275,17 +276,24 @@ void screenInit_sys(const Settings* settings, ScreenState* state, int reset) {
 
         memset(sa, 0, sizeof(ScreenGLView));
 
-        sa->view = glv_create(GLV_ATTRIB_DOUBLEBUFFER, glVersion);
+        sa->view = glv_create(attrib, glVersion);
         if (! sa->view)
             goto fatal;
 
         sa->view->user = sa;
-        glv_setTitle(sa->view, "Ultima IV");  // configService->gameName()
         glv_setEventHandler(sa->view, eventHandler);
 
 #if defined(__linux__) && ! defined(ANDROID)
         _setX11Icon(sa->view, "/usr/share/icons/hicolor/48x48/apps/xu4.png");
 #endif
+#ifndef ANDROID
+        _loadCursors(sa->view);
+#endif
+    }
+
+    {
+    char buf[MOD_NAME_LIMIT];
+    glv_setTitle(sa->view, xu4.config->gameTitle(buf));
     }
 
     {
@@ -322,19 +330,8 @@ void screenInit_sys(const Settings* settings, ScreenState* state, int reset) {
     state->aspectX = (state->displayW - dw) / 2;
     state->aspectY = (state->displayH - dh) / 2;
 
-    // Can settings->gamma be applied?
-
     /* enable or disable the mouse cursor */
-    if (settings->mouseOptions.enabled) {
-#ifndef ANDROID
-        if (! sa->view->cursorCount)
-            _loadCursors(sa->view);
-#endif
-
-        glv_showCursor(sa->view, 1);
-    } else {
-        glv_showCursor(sa->view, 0);
-    }
+    screenShowMouseCursor(settings->mouseOptions.enabled);
 
     gpuError = gpu_init(&sa->gpu, dw, dh, scale, settings->filter);
     if (gpuError)
@@ -400,17 +397,29 @@ void screenSetMouseCursor(MouseCursor cursor) {
     ScreenGLView* sa = SA;
 
     if (cursor != sa->currentCursor) {
-        if (cursor == MC_DEFAULT)
-            glv_showCursor(sa->view, 1);
-        else
-            glv_setCursor(sa->view, cursor-1);
+        if (sa->cursorShown) {
+            if (cursor == MC_DEFAULT)
+                glv_showCursor(sa->view, 1);
+            else
+                glv_setCursor(sa->view, cursor - 1);
+        }
         sa->currentCursor = cursor;
     }
 #endif
 }
 
 void screenShowMouseCursor(bool visible) {
-    glv_showCursor(SA->view, visible ? 1 : 0);
+    ScreenGLView* sa = SA;
+
+    if (visible) {
+        if (sa->currentCursor == MC_DEFAULT)
+            glv_showCursor(sa->view, 1);
+        else
+            glv_setCursor(sa->view, sa->currentCursor - 1);
+    } else {
+        glv_showCursor(sa->view, 0);
+    }
+    sa->cursorShown = visible;
 }
 
 /*

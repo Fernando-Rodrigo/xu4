@@ -2,6 +2,7 @@
  * event_allegro.cpp
  */
 
+#include <cstdio>
 #include "screen_allegro.h"
 #include "event.h"
 #include "xu4.h"
@@ -41,6 +42,9 @@ static void handleKeyDownEvent(const ALLEGRO_EVENT* event,
         case ALLEGRO_KEY_BACKSPACE:
         case ALLEGRO_KEY_DELETE:
             key = U4_BACKSPACE;
+            break;
+        case ALLEGRO_KEY_PAUSE:
+            key = U4_PAUSE;
             break;
         default:
             if (event->keyboard.unichar > 0)
@@ -102,7 +106,7 @@ void EventHandler::handleInputEvents(Controller* waitCon,
             break;
 
         case ALLEGRO_EVENT_MOUSE_BUTTON_DOWN:
-            ie.type = CIE_MOUSE_PRESS;
+            ie.type = IE_MOUSE_PRESS;
 mouse_button:
             if (event.mouse.button < 4)
                 ie.n = mouseButtonMap[event.mouse.button];
@@ -119,25 +123,25 @@ mouse_event:
             break;
 
         case ALLEGRO_EVENT_MOUSE_BUTTON_UP:
-            ie.type = CIE_MOUSE_RELEASE;
+            ie.type = IE_MOUSE_RELEASE;
             goto mouse_button;
 
         case ALLEGRO_EVENT_MOUSE_AXES:
             ie.n = 0;
             if (event.mouse.dz || event.mouse.dw) {
-                ie.type = CIE_MOUSE_WHEEL;
+                ie.type = IE_MOUSE_WHEEL;
                 ie.x = event.mouse.dw;
                 ie.y = event.mouse.dz;
                 goto mouse_event;
             }
-            ie.type = CIE_MOUSE_MOVE;
+            ie.type = IE_MOUSE_MOVE;
             goto mouse_pos;
 
-        /*
-        case SDL_ACTIVEEVENT:
-            handleActiveEvent(event, updateScreen);
+        case ALLEGRO_EVENT_DISPLAY_EXPOSE:
+        case ALLEGRO_EVENT_DISPLAY_SWITCH_IN:
+            expose();
             break;
-        */
+
         case ALLEGRO_EVENT_DISPLAY_CLOSE:
             quitGame();
             break;

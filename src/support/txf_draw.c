@@ -71,11 +71,13 @@ float txf_kerning(const TxfHeader* tf, const TxfGlyph* left,
     return 0.0f;
 }
 
-static const uint8_t* drawTextReturn(TxfDrawState* ds, const uint8_t* it,
-                                     const uint8_t* end)
+const uint8_t* txf_controlChar(TxfDrawState* ds, const uint8_t* it,
+                               const uint8_t* end)
 {
     if (*it == '\n')
     {
+        if (ds->xMax < ds->x)
+            ds->xMax = ds->x;
         ds->x = ds->marginL;
         ds->y -= ds->lineSpacing;
         ds->prev = 0;
@@ -109,9 +111,10 @@ void txf_begin(TxfDrawState* ds, int fontN, float pointSize, float x, float y)
     const TxfHeader* tf = ds->fontTable[fontN];
 
     ds->tf      = tf;
-    ds->lowChar = drawTextReturn;
+    ds->lowChar = txf_controlChar;
     ds->prev    = NULL;
     ds->prScale = tf->pixelRange / tf->fontSize;
+    ds->xMax    =
     ds->x       = x;
     ds->y       = y;
     ds->psize   = pointSize;
@@ -232,9 +235,16 @@ int txf_genText(TxfDrawState* ds, float* uvs, float* vertex, int stride,
             it = ds->lowChar(ds, it, end);
             if( ! it )
                 break;
+            // Track font size changes.
+            if (scale != ds->psize) {
+                scale = ds->psize;
+                pixelRange = scale * ds->prScale;
+            }
         }
     }
 
+    if (ds->xMax < ds->x)
+        ds->xMax = ds->x;
     return drawn;
 }
 
@@ -248,6 +258,11 @@ static float txf_width2(const TxfHeader* tf, const uint8_t* it,
 
     while( it != end ) {
         ch = *it++;
+        if (ch == TC_Font || ch == TC_Color) {
+            if (++it == end)
+                break;
+            continue;
+        }
         if (ch == '\n')
             break;
         tgi = txf_glyph(tf, ch);

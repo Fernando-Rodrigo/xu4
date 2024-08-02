@@ -2,6 +2,7 @@
  * event.cpp
  */
 
+#include <cassert>
 #include <cctype>
 #include <cstring>
 #include <list>
@@ -10,7 +11,6 @@
 
 #include "config.h"
 #include "context.h"
-#include "debug.h"
 #include "location.h"
 #include "savegame.h"
 #include "screen.h"
@@ -18,6 +18,8 @@
 #include "textview.h"
 #include "u4.h"
 #include "xu4.h"
+
+using std::string;
 
 static void frameSleepInit(FrameSleep* fs, int frameDuration) {
     fs->frameInterval = frameDuration;
@@ -37,7 +39,7 @@ EventHandler::EventHandler(int gameCycleDuration, int frameDuration) :
     runRecursion(0),
     updateScreen(NULL)
 {
-    controllerDone = ended = false;
+    controllerDone = ended = paused = false;
     anim_init(&flourishAnim, 64, NULL, NULL);
     anim_init(&fxAnim, 32, NULL, NULL);
     frameSleepInit(&fs, frameDuration);
@@ -128,26 +130,6 @@ void EventHandler::setController(Controller *c) {
     pushController(c);
 }
 
-/**
- * Adds a key handler controller to the stack.
- */
-void EventHandler::pushKeyHandler(KeyHandler::Callback func, void* data) {
-    KeyHandler* kh = new KeyHandler(func, data);
-    pushController(kh);
-}
-
-/**
- * Pops a key handler off the stack.
- * Returns a pointer to the resulting key handler after
- * the current handler is popped.
- */
-void EventHandler::popKeyHandler() {
-    if (controllers.empty())
-        return;
-
-    popController();
-}
-
 const MouseArea* EventHandler::mouseAreaForPoint(int x, int y) const {
     int i;
     const MouseArea *areas = getMouseAreaSet();
@@ -168,7 +150,80 @@ void EventHandler::setScreenUpdate(void (*updateFunc)(void)) {
     updateScreen = updateFunc;
 }
 
+#define GPU_PAUSE
+
+void EventHandler::togglePause() {
+    if (paused) {
+        paused = false;
+    } else {
+#ifdef GPU_PAUSE
+        // Don't pause if Game Browser (or other LAYER_TOP_MENU user) is open.
+        if (screenLayerUsed(LAYER_TOP_MENU))
+            return;
+#endif
+        paused = true;
+        // Set ended to break the run loop.  runPause() resets it so that
+        // the game does not end.
+        ended = true;
+    }
+}
+
+void EventHandler::expose() {
+    if (paused)
+        screenSwapBuffers();
+}
+
 #include "support/getTicks.c"
+
+#ifdef GPU_PAUSE
+#include "gpu.h"
+#include "gui.h"
+
+static void renderPause(ScreenState* ss, void* data)
+{
+    gpu_drawGui(xu4.gpu, GPU_DLIST_GUI, WID_NONE, 0);
+}
+#endif
+
+// Return true if game should end.
+bool EventHandler::runPause() {
+    Controller waitCon;
+
+    soundSuspend(1);
+    screenSetMouseCursor(MC_DEFAULT);
+#ifdef GPU_PAUSE
+    static uint8_t pauseGui[] = {
+        LAYOUT_V, BG_COLOR_CI, 128,
+        MARGIN_V_PER, 42, FONT_VSIZE, 38, LABEL_DT_S,
+        LAYOUT_END
+    };
+    const void* guiData[1];
+    guiData[0] = "\x13\xAPaused";
+    TxfDrawState ds;
+    ds.fontTable = screenState()->fontTable;
+    float* attr = gpu_beginTris(xu4.gpu, GPU_DLIST_GUI);
+    attr = gui_layout(attr, NULL, &ds, pauseGui, guiData);
+    gpu_endTris(xu4.gpu, GPU_DLIST_GUI, attr);
+
+    screenSetLayer(LAYER_TOP_MENU, renderPause, this);
+#else
+    screenTextAt(16, 12, "( Paused )");
+    screenUploadToGPU();
+#endif
+    screenSwapBuffers();
+
+    ended = false;
+    do {
+        msecSleep(333);
+        handleInputEvents(&waitCon, NULL);
+    } while (paused && ! ended);
+
+#ifdef GPU_PAUSE
+    screenSetLayer(LAYER_TOP_MENU, NULL, NULL);
+#endif
+    soundSuspend(0);
+    return ended;
+}
 
 /*
  * Return non-zero if waitTime has been reached or passed.
@@ -282,6 +337,7 @@ bool EventHandler::run() {
     }
     ++runRecursion;
 
+resume:
     while (! ended && ! controllerDone) {
         handleInputEvents(NULL, updateScreen);
 #ifdef DEBUG
@@ -302,9 +358,14 @@ bool EventHandler::run() {
         frameSleep(&fs, 0);
     }
 
+    if (paused && ! runPause())
+        goto resume;
+
     --runRecursion;
     return ended;
 }
+
+//----------------------------------------------------------------------------
 
 #ifdef DEBUG
 #include <fcntl.h>
@@ -463,9 +524,7 @@ uint32_t EventHandler::replay(const char* file) {
 }
 #endif
 
-
 //----------------------------------------------------------------------------
-
 
 /* TimedEvent functions */
 TimedEvent::TimedEvent(TimedEvent::Callback cb, int i, void *d) :
@@ -580,6 +639,33 @@ const MouseArea* EventHandler::getMouseAreaSet() const {
         return NULL;
 }
 
+//----------------------------------------------------------------------------
+
+/**
+ * A controller to read a string, terminated by the enter key.
+ */
+class ReadStringController : public WaitableController<string> {
+public:
+    ReadStringController(int maxlen, int screenX, int screenY,
+                         TextView* view = NULL,
+                         const char* accepted_chars = NULL);
+
+    virtual bool keyPressed(int key);
+
+#ifdef IOS
+    void setValue(const string &utf8StringValue) {
+        value = utf8StringValue;
+    }
+#endif
+
+protected:
+    int maxlen, screenX, screenY;
+    TextView *view;
+    uint8_t accepted[16];   // Character bitset.
+
+    friend EventHandler;
+};
+
 #define TEST_BIT(bits, c)   (bits[c >> 3] & 1 << (c & 7))
 #define MAX_BITS    128
 
@@ -631,7 +717,7 @@ bool ReadStringController::keyPressed(int key) {
 
                 if (view) {
                     view->textAt(screenX + len - 1, screenY, " ");
-                    view->setCursorPos(screenX + len - 1, screenY, true);
+                    view->setCursorPos(screenX + len - 1, screenY);
                 } else {
                     screenHideCursor();
                     screenTextAt(screenX + len - 1, screenY, " ");
@@ -654,6 +740,7 @@ bool ReadStringController::keyPressed(int key) {
 
             if (view) {
                 view->textAtFmt(screenX + len, screenY, "%c", key);
+                view->setCursorPos(screenX + len + 1, screenY);
             } else {
                 screenHideCursor();
                 screenTextAt(screenX + len, screenY, "%c", key);
@@ -666,52 +753,30 @@ bool ReadStringController::keyPressed(int key) {
             soundInvalidInput();
         return true;
     } else {
-        bool valid = KeyHandler::defaultHandler(key, NULL);
+        bool valid = EventHandler::defaultKeyHandler(key);
         if (! valid)
             soundInvalidInput();
         return valid;
     }
 }
 
-string ReadStringController::get(int maxlen, int screenX, int screenY, const char* extraChars) {
-    ReadStringController ctrl(maxlen, screenX, screenY);
-    if (extraChars)
-        addCharBits(ctrl.accepted, extraChars);
+//----------------------------------------------------------------------------
 
-    xu4.eventHandler->pushController(&ctrl);
-    return ctrl.waitFor();
-}
+/**
+ * A controller to read a single key from a provided list.
+ */
+class ReadChoiceController : public WaitableController<int> {
+public:
+    ReadChoiceController(const string &choices);
+    virtual bool keyPressed(int key);
 
-string ReadStringController::get(int maxlen, TextView *view, const char* extraChars) {
-    ReadStringController ctrl(maxlen, view->getCursorX(), view->getCursorY(),
-                              view);
-    if (extraChars)
-        addCharBits(ctrl.accepted, extraChars);
-
-    xu4.eventHandler->pushController(&ctrl);
-    return ctrl.waitFor();
-}
-
-ReadIntController::ReadIntController(int maxlen, int screenX, int screenY) :
-    ReadStringController(maxlen, screenX, screenY, NULL, "0123456789 \n\r\010")
-{}
-
-int ReadIntController::get(int maxlen) {
-    ReadIntController ctrl(maxlen, TEXT_AREA_X + c->col, TEXT_AREA_Y + c->line);
-    xu4.eventHandler->pushController(&ctrl);
-    ctrl.waitFor();
-    return ctrl.getInt();
-}
-
-int ReadIntController::getInt() const {
-    return static_cast<int>(strtol(value.c_str(), NULL, 10));
-}
+protected:
+    string choices;
+};
 
 ReadChoiceController::ReadChoiceController(const string &choices) {
     this->choices = choices;
 }
-
-extern int screenCursorEnabled();
 
 bool ReadChoiceController::keyPressed(int key) {
     // isupper() accepts 1-byte characters, yet the modifier keys
@@ -721,8 +786,9 @@ bool ReadChoiceController::keyPressed(int key) {
 
     if (choices.empty() || choices.find_first_of(key) < choices.length()) {
         // If the value is printable, display it
-        if (screenCursorEnabled() && key > ' ' && key <= 0x7F)
-            screenMessage("%c", toupper(key));
+        const ScreenState* ss = screenState();
+        if (ss->cursorVisible && key > ' ' && key <= 0x7F)
+            screenShowChar(toupper(key), ss->cursorX, ss->cursorY);
         value = key;
         doneWaiting();
         return true;
@@ -731,11 +797,16 @@ bool ReadChoiceController::keyPressed(int key) {
     return false;
 }
 
-char ReadChoiceController::get(const string &choices) {
-    ReadChoiceController ctrl(choices);
-    xu4.eventHandler->pushController(&ctrl);
-    return ctrl.waitFor();
-}
+//----------------------------------------------------------------------------
+
+/**
+ * A controller to read a direction enter with the arrow keys.
+ */
+class ReadDirController : public WaitableController<Direction> {
+public:
+    ReadDirController();
+    virtual bool keyPressed(int key);
+};
 
 ReadDirController::ReadDirController() {
     value = DIR_NONE;
@@ -765,6 +836,16 @@ bool ReadDirController::keyPressed(int key) {
     return false;
 }
 
+//----------------------------------------------------------------------------
+
+class AnyKeyController : public Controller {
+public:
+    void wait();
+    void waitTimeout();
+    virtual bool keyPressed(int key);
+    virtual bool inputEvent(const InputEvent*);
+    virtual void timerFired();
+};
 
 void AnyKeyController::wait() {
     timerInterval = 0;
@@ -782,18 +863,113 @@ bool AnyKeyController::keyPressed(int key) {
     return true;
 }
 
+bool AnyKeyController::inputEvent(const InputEvent* ev) {
+    if (ev->type == IE_MOUSE_PRESS && ev->n == CMOUSE_LEFT)
+        xu4.eventHandler->setControllerDone();
+    return true;
+}
+
 void AnyKeyController::timerFired() {
     xu4.eventHandler->setControllerDone();
 }
 
 //----------------------------------------------------------------------------
 
+/**
+ * A controller to read a player number.
+ */
+class ReadPlayerController : public ReadChoiceController {
+public:
+    ReadPlayerController();
+    ~ReadPlayerController();
+    virtual bool keyPressed(int key);
 
-KeyHandler::KeyHandler(KeyHandler::Callback func, void* userData) :
-    handler(func), data(userData)
-{
-    setDeleteOnPop(true);
+    int getPlayer();
+    int waitFor();
+};
+
+ReadPlayerController::ReadPlayerController() : ReadChoiceController("12345678 \033\n") {
+#ifdef IOS
+    U4IOS::beginCharacterChoiceDialog();
+#endif
 }
+
+ReadPlayerController::~ReadPlayerController() {
+#ifdef IOS
+    U4IOS::endCharacterChoiceDialog();
+#endif
+}
+
+bool ReadPlayerController::keyPressed(int key) {
+    bool valid = ReadChoiceController::keyPressed(key);
+    if (valid) {
+        if (value < '1' ||
+            value > ('0' + c->saveGame->members))
+            value = '0';
+    } else {
+        value = '0';
+    }
+    return valid;
+}
+
+int ReadPlayerController::getPlayer() {
+    return value - '1';
+}
+
+int ReadPlayerController::waitFor() {
+    ReadChoiceController::waitFor();
+    return getPlayer();
+}
+
+//----------------------------------------------------------------------------
+
+/**
+ * A controller to handle input for commands requiring a letter
+ * argument in the range 'a' - lastValidLetter.
+ */
+class AlphaActionController : public WaitableController<int> {
+public:
+    AlphaActionController(char letter, const string &p) : lastValidLetter(letter), prompt(p) {}
+    bool keyPressed(int key);
+
+private:
+    char lastValidLetter;
+    string prompt;
+};
+
+bool AlphaActionController::keyPressed(int key) {
+    if (islower(key))
+        key = toupper(key);
+
+    if (key >= 'A' && key <= toupper(lastValidLetter)) {
+        screenMessage("%c\n", key);
+        value = key - 'A';
+        doneWaiting();
+    } else if (key == U4_SPACE || key == U4_ESC || key == U4_ENTER) {
+        screenMessage("\n");
+        value = -1;
+        doneWaiting();
+    } else {
+        screenMessage("\n%s", prompt.c_str());
+        return EventHandler::defaultKeyHandler(key);
+    }
+    return true;
+}
+
+//----------------------------------------------------------------------------
+
+/*
+ * A controller that ignores keypresses
+ */
+class IgnoreKeysController : public Controller {
+public:
+    virtual bool keyPressed(int key) {
+        EventHandler::globalKeyHandler(key);
+        return true;
+    }
+};
+
+//----------------------------------------------------------------------------
 
 /**
  * Handles any and all keystrokes.
@@ -802,14 +978,16 @@ KeyHandler::KeyHandler(KeyHandler::Callback func, void* userData) :
  */
 bool EventHandler::globalKeyHandler(int key) {
     switch(key) {
+    case U4_PAUSE:
+    case U4_ALT + 'p':
+        xu4.eventHandler->togglePause();
+        return true;
+
 #if defined(MACOSX)
     case U4_META + 'q': /* Cmd+q */
     case U4_META + 'x': /* Cmd+x */
-    //case U4_META + 'Q':   // Handle shifted version?
-    //case U4_META + 'X':
 #endif
     case U4_ALT + 'x': /* Alt+x */
-    //case U4_ALT + 'X':    // Handle shifted version?
 #if defined(WIN32)
     case U4_ALT + U4_FKEY + 3:
 #endif
@@ -824,7 +1002,7 @@ bool EventHandler::globalKeyHandler(int key) {
 /**
  * A default key handler that should be valid everywhere
  */
-bool KeyHandler::defaultHandler(int key, void *data) {
+bool EventHandler::defaultKeyHandler(int key) {
     switch (key) {
 #ifdef DEBUG
     case '`':
@@ -850,16 +1028,135 @@ bool KeyHandler::defaultHandler(int key, void *data) {
     return true;
 }
 
-/**
- * A key handler that ignores keypresses
+//----------------------------------------------------------------------------
+
+/*
+ * Read a player number.
+ * Return -1 if none is selected.
  */
-bool KeyHandler::ignoreKeys(int key, void *data) {
-    return true;
+int EventHandler::choosePlayer()
+{
+    ReadPlayerController ctrl;
+    xu4.eventHandler->pushController(&ctrl);
+    return ctrl.waitFor();
 }
 
-bool KeyHandler::keyPressed(int key) {
-    bool processed = EventHandler::globalKeyHandler(key);
-    if (! processed)
-        processed = handler(key, data);
-    return processed;
+/**
+ * Handle input for commands requiring a letter argument in the
+ * range 'a' - lastValidLetter.
+ */
+int EventHandler::readAlphaAction(char lastValidLetter, const char* prompt)
+{
+    AlphaActionController ctrl(lastValidLetter, prompt);
+    xu4.eventHandler->pushController(&ctrl);
+    return ctrl.waitFor();
+}
+
+/*
+ * Read a single key from a provided list.
+ */
+char EventHandler::readChoice(const char* choices)
+{
+    ReadChoiceController ctrl(choices);
+    xu4.eventHandler->pushController(&ctrl);
+    return ctrl.waitFor();
+}
+
+/*
+ * Read a direction entered with the arrow keys.
+ */
+Direction EventHandler::readDir()
+{
+    ReadDirController ctrl;
+#ifdef IOS
+    U4IOS::IOSDirectionHelper directionPopup;
+#endif
+    xu4.eventHandler->pushController(&ctrl);
+    return ctrl.waitFor();
+}
+
+/**
+ * Read an integer, terminated by the enter key.
+ * Non-numeric keys are ignored.
+ */
+int EventHandler::readInt(int maxlen)
+{
+    ReadStringController ctrl(maxlen, TEXT_AREA_X + c->col,
+                                      TEXT_AREA_Y + c->line,
+                              NULL, "0123456789 \n\r\010");
+
+    xu4.eventHandler->pushController(&ctrl);
+    string s = ctrl.waitFor();
+    return static_cast<int>(strtol(s.c_str(), NULL, 10));
+}
+
+/*
+ * Read a string, terminated by the enter key.
+ */
+const char* EventHandler::readString(int maxlen, const char *extraChars)
+{
+    assert(size_t(maxlen) < sizeof(xu4.eventHandler->readStringBuf));
+    ReadStringController ctrl(maxlen, TEXT_AREA_X + c->col,
+                                      TEXT_AREA_Y + c->line);
+    if (extraChars)
+        addCharBits(ctrl.accepted, extraChars);
+
+    xu4.eventHandler->pushController(&ctrl);
+    ctrl.waitFor();
+
+    char* buf = xu4.eventHandler->readStringBuf;
+    strcpy(buf, ctrl.value.c_str());
+    return buf;
+}
+
+/*
+ * Read a string, terminated by the enter key.
+ */
+const char* EventHandler::readStringView(int maxlen, TextView *view,
+                                         const char* extraChars) {
+    assert(size_t(maxlen) < sizeof(xu4.eventHandler->readStringBuf));
+    ReadStringController ctrl(maxlen, view->cursorX(), view->cursorY(),
+                              view);
+    if (extraChars)
+        addCharBits(ctrl.accepted, extraChars);
+
+    xu4.eventHandler->pushController(&ctrl);
+    ctrl.waitFor();
+
+    char* buf = xu4.eventHandler->readStringBuf;
+    strcpy(buf, ctrl.value.c_str());
+    return buf;
+}
+
+/*
+ * Wait until a key is pressed.
+ */
+void EventHandler::waitAnyKey()
+{
+#if 1
+    AnyKeyController ctrl;
+    ctrl.wait();
+#else
+    ReadChoiceController ctrl("");
+    xu4.eventHandler->pushController(&ctrl);
+    ctrl.waitFor();
+#endif
+}
+
+/*
+ * Wait briefly (10 seconds) for a key press.
+ */
+void EventHandler::waitAnyKeyTimeout()
+{
+    AnyKeyController ctrl;
+    ctrl.waitTimeout();
+}
+
+/*
+ * Ignore non-global key & mouse events forever.
+ */
+void EventHandler::ignoreInput()
+{
+    IgnoreKeysController ctrl;
+    xu4.eventHandler->runController(&ctrl);
 }

@@ -29,6 +29,7 @@
 #define ATTR_COUNT  7
 #define LO_DEPTH    6
 #define MAX_SIZECON 24
+#define WIDGET_SHADER_ID(wid)   ((wid < 0) ? 0.0f : -1.0f - wid)
 
 enum AlignBits {
     ALIGN_L = 1,
@@ -53,9 +54,30 @@ typedef struct {
     int16_t prefW, prefH;
 } SizeCon;
 
+static const float button_uvs[4] = { 2.0f, 3.0f, 90.0f, 35.0f };
+
 //----------------------------------------------------------------------------
 
-static float* gui_drawRect(float* attr, const int16_t* wbox, float colorIndex)
+float* gui_emitText(TxfDrawState* ds, float* attr, const char* text,
+                    uint32_t len)
+{
+    int quads = txf_genText(ds, attr + 3, attr, ATTR_COUNT,
+                            (const uint8_t*) text, len);
+    return attr + (quads * 6 * ATTR_COUNT);
+}
+
+float* gui_emitQuadCi(float* attr, const float* rect, float colorIndex)
+{
+    float uvs[4];
+    gpu_guiClutUV(xu4.gpu, uvs, colorIndex);
+    return gpu_emitQuadPq(attr, rect, uvs, 0.0f, 0.0f);
+}
+
+/*
+ * \param widgetId  Zero based identifier or WID_NONE if not a widget.
+ */
+static float* gui_emitRect(float* attr, const int16_t* wbox, float colorIndex,
+                           int widgetId)
 {
     float rect[4];
     float uvs[4];
@@ -66,10 +88,32 @@ static float* gui_drawRect(float* attr, const int16_t* wbox, float colorIndex)
     rect[3] = (float) wbox[3];
 
     gpu_guiClutUV(xu4.gpu, uvs, colorIndex);
-    uvs[2] = uvs[0];
-    uvs[3] = uvs[1];
 
-    return gpu_emitQuad(attr, rect, uvs);
+    return gpu_emitQuadPq(attr, rect, uvs, WIDGET_SHADER_ID(widgetId), 0.0f);
+}
+
+/*
+ * \param widgetId  Zero based identifier or WID_NONE if not a widget.
+ */
+static float* gui_emitRectTex(float* attr, const int16_t* wbox,
+                              const float* pixelUVs, int widgetId)
+{
+    float rect[4];
+    float uvs[4];
+    const float texW = 256.0f;
+    const float texH = 128.0f;
+
+    rect[0] = (float) wbox[0];
+    rect[1] = (float) wbox[1];
+    rect[2] = (float) wbox[2];
+    rect[3] = (float) wbox[3];
+
+    uvs[0] =  pixelUVs[0] / texW;
+    uvs[1] =  pixelUVs[1] / texH;
+    uvs[2] =  pixelUVs[2] / texW;
+    uvs[3] =  pixelUVs[3] / texH;
+
+    return gpu_emitQuadPq(attr, rect, uvs, WIDGET_SHADER_ID(widgetId), 0.0f);
 }
 
 static void button_size(SizeCon* size, TxfDrawState* ds, const uint8_t* text)
@@ -84,21 +128,40 @@ static void button_size(SizeCon* size, TxfDrawState* ds, const uint8_t* text)
     size->prefH = (int16_t) (fsize[1] * ds->psize * 1.6f);
 }
 
-static float* widget_button(float* attr, const GuiRect* wbox,
+static float* widget_button(float* attr, int wid, const GuiRect* wbox,
                             const SizeCon* scon, TxfDrawState* ds,
-                            const uint8_t* text)
+                            const char* text)
 {
     int textW;
-    int quadCount;
+    float saveCol;
+    float tx, ty;
+    size_t tlen;
+    int i;
 
-    attr = gui_drawRect(attr, &wbox->x, 40.0f);
+    attr = gui_emitRectTex(attr, &wbox->x, button_uvs, wid);
+    //attr = gui_emitRect(attr, &wbox->x, 40.0f, wid);
 
     textW = scon->prefW - (int16_t) (1.2f * ds->psize);
-    ds->x = (float) (wbox->x + ((wbox->w - textW) / 2));
-    ds->y = (float) wbox->y - ds->tf->descender * ds->psize + 0.3f * ds->psize;
-    quadCount = txf_genText(ds, attr + 3, attr, ATTR_COUNT,
-                            text, strlen((const char*) text));
-    return attr + (quadCount * 6 * ATTR_COUNT);
+    tx = (float) (wbox->x + ((wbox->w - textW) / 2));
+    ty = (float) (wbox->y + wbox->h / 2) - ds->lineSpacing * 0.3f;
+    tlen = strlen(text);
+    saveCol = ds->colorIndex;
+
+    for (i = 0; i < 2; ++i) {
+        if (i == 0) {
+            ds->x = tx + 2.0f;
+            ds->y = ty - 2.0f;
+            ds->colorIndex = COL_BLACK + COL_TRANS;
+        } else {
+            ds->x = tx;
+            ds->y = ty;
+            ds->colorIndex = COL_BEIGE;
+        }
+        attr = gui_emitText(ds, attr, text, tlen);
+    }
+
+    ds->colorIndex = saveCol;
+    return attr;
 }
 
 static void label_size(SizeCon* size, TxfDrawState* ds, const uint8_t* text)
@@ -110,71 +173,76 @@ static void label_size(SizeCon* size, TxfDrawState* ds, const uint8_t* text)
 }
 
 static float* widget_label(float* attr, const GuiRect* wbox, TxfDrawState* ds,
-                           const uint8_t* text)
+                           const char* text)
 {
-    int quadCount;
-
     ds->x = (float) wbox->x;
     ds->y = (float) wbox->y - ds->tf->descender * ds->psize;
-    quadCount = txf_genText(ds, attr + 3, attr, ATTR_COUNT,
-                            text, strlen((const char*) text));
-    return attr + (quadCount * 6 * ATTR_COUNT);
+    return gui_emitText(ds, attr, text, strlen(text));
 }
 
-static void list_size(SizeCon* size, TxfDrawState* ds, StringTable* st)
+static void list_size(SizeCon* size, TxfDrawState* ds, int cols, int rows)
 {
     float fsize[2];
-    int rows;
+    float averageW = txf_emWidth(ds->tf, (const uint8_t*) "Aa", 2) * 0.5f;
 
-    if (st->used) {
-        const char* text;
-        const char* longText;
-        int len;
-        int maxLen = 0;
+    fsize[0] = ds->psize * averageW;
+    fsize[1] = ds->psize * ds->tf->lineHeight;
 
-        for (uint32_t i = 0; i < st->used; ++i) {
-            text = sst_stringL(st, i, &len);
-            if (len > maxLen) {
-                maxLen = len;
-                longText = text;
-            }
-        }
-        txf_emSize(ds->tf, (const uint8_t*) longText, maxLen, fsize);
-    } else {
-        txf_emSize(ds->tf, (const uint8_t*) "<empty>", 7, fsize);
-    }
-    fsize[0] *= ds->psize;
-    fsize[1] *= ds->psize;
-
-    rows = (st->used < 3) ? 3 : st->used;
-
-    size->minW = (int16_t) (ds->psize * 4.0f);
+    size->minW = (int16_t) (fsize[0] * 4.0f);
     size->minH = 3 * (int16_t) fsize[1];
-    size->prefW = (int16_t) fsize[0];
+    size->prefW = (int16_t) (fsize[0] * cols);
     size->prefH = (int16_t) (fsize[1] * rows);
 }
 
-static float* widget_list(float* attr, const GuiRect* wbox, TxfDrawState* ds,
-                          StringTable* st)
+static void list_applyCellStyle(ListDrawState* ds, int col)
 {
-    const uint8_t* strings = (const uint8_t*) sst_strings(st);
+    const ListCellStyle* cell = ds->cell + col;
+    ds->x = cell->tabStop;
+    ds->prev = NULL;
+    ds->colorIndex = (float) (ds->selected ? cell->selColor : cell->color);
+    ds->psize = ds->psizeList * cell->fontScale;
+}
+
+static const uint8_t* list_controlChar(TxfDrawState* ds, const uint8_t* it,
+                                       const uint8_t* end)
+{
+    if (*it == '\t') {
+        ListDrawState* ls = (ListDrawState*) ds;
+        list_applyCellStyle(ls, ++ls->tabCount);
+        return it+1;
+    }
+    return txf_controlChar(ds, it, end);
+}
+
+/*
+ * Emit triangles for each line of text in a StringTable.
+ *
+ * \param select            Index of selected item (-1 for none).
+ * \param selectColorIndex  Shader CLUT index or zero for default foreground.
+ */
+float* gui_emitListItems(float* attr, ListDrawState* ds, StringTable* st,
+                         int select)
+{
+    const char* strings = sst_strings(st);
     const StringEntry* it  = st->table;
     const StringEntry* end = it + st->used;
-    float left = (float) wbox->x;
-    int quadCount;
+    const StringEntry* sel = it + select;
+    TxfControlFunc origCtrl;
 
-    //attr = gui_drawRect(attr, &wbox->x, 3.0f);
-
-    ds->y = (float) (wbox->y + wbox->h) - ds->tf->descender * ds->psize;
+    origCtrl = ds->lowChar;
+    ds->lowChar = list_controlChar;
+    ds->y = 0.0f;
 
     for (; it != end; ++it) {
-        ds->x = left;
         ds->y -= ds->lineSpacing;
-        quadCount = txf_genText(ds, attr + 3, attr, ATTR_COUNT,
-                                strings + it->start, it->len);
-        attr += quadCount * 6 * ATTR_COUNT;
-        ds->x = left;
+        ds->selected = (it == sel);
+        ds->tabCount = 0;
+        list_applyCellStyle(ds, 0);
+
+        attr = gui_emitText(ds, attr, strings + it->start, it->len);
     }
+
+    ds->lowChar = origCtrl;
     return attr;
 }
 
@@ -306,17 +374,16 @@ static void gui_setRootArea(LayoutBox* lo, const GuiRect* root)
   The layout program must begin with a LAYOUT_* instruction and ends with a
   paired LAYOUT_END instruction.
 
-  \param primList   The list identifier used with gpu_beginTris()/gpu_endTris().
+  \param attr       Buffer for vertex attributes.
   \param root       A rectangular pixel area for this layout, or NULL to
                     use screen size.
   \param txfArr     Font list.
   \param bytecode   A program of GuiOpcode instructions.
   \param data       A pointer array of data referenced by bytecode program.
 
-  \return End primitive attribute pointer which caller must pass to
-          gpu_endTris().
+  \return End vertex attribute pointer.
 */
-float* gui_layout(int primList, const GuiRect* root, TxfDrawState* ds,
+float* gui_layout(float* attr, const GuiRect* root, TxfDrawState* ds,
                   const uint8_t* bytecode, const void** data)
 {
     SizeCon sconStack[MAX_SIZECON];
@@ -324,10 +391,12 @@ float* gui_layout(int primList, const GuiRect* root, TxfDrawState* ds,
     LayoutBox* lo;
     SizeCon* scon;
     GuiRect wbox;
-    float* attr;
     int arg;
+    int areaWid = WID_NONE;
+    GuiArea* areaArr = NULL;
     const uint8_t* pc;
     const void** dp;
+    float vgaScale = screenState()->aspectH / 480.0f;
 
 #define RESET_LAYOUT \
     lo = NULL; \
@@ -471,11 +540,24 @@ float* gui_layout(int primList, const GuiRect* root, TxfDrawState* ds,
             txf_setFontSize(ds, (float) *pc++);
             break;
 
+        case FONT_VSIZE:     // scaled-vga-height
+            txf_setFontSize(ds, vgaScale * (float) *pc++);
+            break;
+
+        case FONT_COLOR:    // color-index
+            pc++;
+            break;
+
         case BG_COLOR_CI:   // color-index
             pc++;
             break;
 
         // Widgets
+        case ARRAY_DT_AREA: // initial-wid
+            dp++;
+            pc++;
+            break;
+
         case BUTTON_DT_S:
             button_size(scon, ds, (const uint8_t*) *dp++);
 layout_inc:
@@ -487,12 +569,16 @@ layout_inc:
             label_size(scon, ds, (const uint8_t*) *dp++);
             goto layout_inc;
 
-        case LIST_DT_ST:
-            list_size(scon, ds, (StringTable*) *dp++);
+        case LIST_DIM:
+            list_size(scon, ds, pc[0], pc[1]);
+            pc += 2;
             goto layout_inc;
 
         case STORE_DT_AREA:
             dp++;
+            break;
+
+        case STORE_AREA:
             break;
         }
     }
@@ -501,8 +587,6 @@ layout_done:
 
     // Second pass to create widget draw list.
     RESET_LAYOUT;
-
-    attr = gpu_beginTris(xu4.gpu, primList);
 
     for(;;) {
         switch (*pc++) {
@@ -675,34 +759,62 @@ layout_done:
             txf_setFontSize(ds, (float) *pc++);
             break;
 
+        case FONT_VSIZE:     // scaled-vga-height
+            txf_setFontSize(ds, vgaScale * (float) *pc++);
+            break;
+
+        case FONT_COLOR:    // color-index
+            ds->colorIndex = (float) *pc++;
+            break;
+
         case BG_COLOR_CI:   // color-index
             arg = *pc++;
-            attr = gui_drawRect(attr, &lo->x, (float) arg);
+            attr = gui_emitRect(attr, &lo->x, (float) arg, WID_NONE);
             break;
 
         // Widgets
+        case ARRAY_DT_AREA: // initial-wid
+            areaArr = (GuiArea*) *dp++;
+            areaWid = *pc++;
+            break;
+
         case BUTTON_DT_S:
             gui_align(&wbox, lo, scon);
-            attr = widget_button(attr, &wbox, scon, ds, (const uint8_t*) *dp++);
+            attr = widget_button(attr, areaWid, &wbox, scon, ds,
+                                 (const char*) *dp++);
             ++scon;
             break;
 
         case LABEL_DT_S:
             gui_align(&wbox, lo, scon);
-            attr = widget_label(attr, &wbox, ds, (const uint8_t*) *dp++);
+            attr = widget_label(attr, &wbox, ds, (const char*) *dp++);
             ++scon;
             break;
 
-        case LIST_DT_ST:
+        case LIST_DIM:
+            pc += 2;
             gui_align(&wbox, lo, scon);
-            attr = widget_list(attr, &wbox, ds, (StringTable*) *dp++);
             ++scon;
             break;
 
         case STORE_DT_AREA:
             {
-            GuiRect* dst = (GuiRect*) *dp++;
-            memcpy(dst, &wbox, sizeof(GuiRect));
+            GuiArea* dst = (GuiArea*) *dp++;
+            dst->x  = wbox.x;
+            dst->y  = wbox.y;
+            dst->x2 = wbox.x + wbox.w;
+            dst->y2 = wbox.y + wbox.h;
+            }
+            break;
+
+        case STORE_AREA:
+            if (areaArr) {
+                areaArr->x  = wbox.x;
+                areaArr->y  = wbox.y;
+                areaArr->x2 = wbox.x + wbox.w;
+                areaArr->y2 = wbox.y + wbox.h;
+                areaArr->wid = areaWid++;
+                ++areaArr;
             }
             break;
         }
@@ -710,4 +822,24 @@ layout_done:
 
 done:
     return attr;
+}
+
+//----------------------------------------------------------------------------
+
+#include "btree2.c"
+
+/**
+ * Return opaque tree pointer which caller must free().
+ */
+void* gui_areaTree(const GuiArea* areas, int count)
+{
+    BTree2Gen gen;
+    return btree2_generate(&gen, (const BTree2Box*) areas, count);
+}
+
+const GuiArea* gui_pick(const void* tree, const GuiArea* areas,
+                        uint16_t x, uint16_t y)
+{
+    return (const GuiArea*)
+        btree2_pick((const BTree2*) tree, (const BTree2Box*) areas, x, y);
 }

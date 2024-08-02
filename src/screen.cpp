@@ -19,6 +19,7 @@
 #include "game.h"
 #include "imagemgr.h"
 #include "settings.h"
+#include "stats.h"
 #include "textview.h"
 #include "tileanim.h"
 #include "tileset.h"
@@ -80,12 +81,9 @@ struct Screen {
     char* msgBuffer;
     ScreenState state;
     TxfHeader* txf[3];
-    int cursorX;
-    int cursorY;
-    int cursorStatus;
-    int cursorEnabled;
     short needPrompt;
     short colorFG;
+    uint8_t uploadScreen;
     uint8_t layersAvail;
 #ifdef GPU_RENDER
     ImageInfo* textureInfo;
@@ -104,6 +102,7 @@ struct Screen {
     Screen(uint8_t layerCount) {
         layers = new RenderLayer[layerCount];
         memset(layers, 0, sizeof(RenderLayer) * layerCount);
+        uploadScreen = 0;
         layersAvail = layerCount;
 
         gemLayout = NULL;
@@ -119,10 +118,9 @@ struct Screen {
         state.vertOffset = 0;
         state.displayW = state.displayH = 0;
         state.aspectW = state.aspectH = 0;
+        state.cursorX = state.cursorY = 0;
+        state.cursorVisible = false;
 
-        cursorX = cursorY = 0;
-        cursorStatus = 0;
-        cursorEnabled = 1;
         needPrompt = 1;
         colorFG = FONT_COLOR_INDEX(FG_WHITE);
 #ifdef GPU_RENDER
@@ -305,6 +303,10 @@ void screenSetLayer(int layer, void (*renderFunc)(ScreenState*, void*),
     rl->data = data;
 }
 
+bool screenLayerUsed(int layer) {
+    return XU4_SCREEN->layers[layer].func ? true : false;
+}
+
 void screenTextAt(int x, int y, const char *fmt, ...) {
     char* buffer = XU4_SCREEN->msgBuffer;
     int i, buflen;
@@ -320,7 +322,7 @@ void screenTextAt(int x, int y, const char *fmt, ...) {
 
 void screenPrompt() {
     Screen* scr = XU4_SCREEN;
-    if (scr->needPrompt && scr->cursorEnabled && c->col == 0) {
+    if (scr->needPrompt && scr->state.cursorVisible && c->col == 0) {
         screenMessage("%c", CHARSET_PROMPT);
         scr->needPrompt = 0;
     }
@@ -338,13 +340,9 @@ void screenCrLf() {
     /* scroll the message area, if necessary */
     if (c->line == TEXT_AREA_H) {
         c->line--;
-        screenHideCursor();
         screenScrollMessageArea();
-        screenSetCursorPos(TEXT_AREA_X + c->col, TEXT_AREA_Y + c->line);
-        screenShowCursor();
-    } else {
-        screenSetCursorPos(TEXT_AREA_X + c->col, TEXT_AREA_Y + c->line);
     }
+    screenSetCursorPos(TEXT_AREA_X + c->col, TEXT_AREA_Y + c->line);
 }
 
 // whitespace & color codes: " \b\t\n\r\023\024\025\026\027\030\031"
@@ -376,13 +374,44 @@ void screenMessage(const char *fmt, ...) {
     screenMessageN(buffer, buflen);
 }
 
+/*
+ * Center first line of text in message area.
+ */
+void screenMessageCenter(const char* text, int newlines) {
+    const int half = TEXT_AREA_W / 2;
+    char* buffer = XU4_SCREEN->msgBuffer;
+    char* start = buffer + half;
+    char* cp = start;
+    char* endOfLine = NULL;
+    int ch, lineLen;
+
+    memset(buffer, ' ', half);
+    while ((ch = *text++)) {
+        if (ch == '\n' && ! endOfLine)
+            endOfLine = cp;
+        *cp++ = ch;
+    }
+
+    if (! endOfLine)
+        endOfLine = cp;
+    lineLen = endOfLine - start;
+    if (lineLen > TEXT_AREA_W)
+        lineLen = TEXT_AREA_W;
+    start -= half - (lineLen+1) / 2;    // Indent
+
+    while (newlines) {
+        --newlines;
+        *cp++ = '\n';
+    }
+
+    screenMessageN(start, cp - start);
+}
+
 void screenMessageN(const char* buffer, int buflen) {
     bool colorize = xu4.settings->enhancements &&
                     xu4.settings->enhancementsOptions.textColorization;
     const int colCount = TEXT_AREA_W;
     int i, w;
-
-    screenHideCursor();
 
     /* scroll the message area, if necessary */
     if (c->line == TEXT_AREA_H) {
@@ -437,7 +466,7 @@ newline:
 
                 /* don't show a space in column 1.  Helps with Hawkwind, but
                  * disables centering of endgame message. */
-                if (c->col == 0 && c->location->viewMode != VIEW_CUTSCENE)
+                if (c->col == 0 && c->hawkwindHack)
                     continue;
 
                 screenShowChar(' ', TEXT_AREA_X+c->col, TEXT_AREA_Y+c->line);
@@ -475,7 +504,6 @@ newline:
     }
 
     screenSetCursorPos(TEXT_AREA_X + c->col, TEXT_AREA_Y + c->line);
-    screenShowCursor();
 
     XU4_SCREEN->needPrompt = 1;
 }
@@ -486,7 +514,7 @@ const vector<string>& screenGetGemLayoutNames() {
 
 const char** screenGetFilterNames() {
     static const char* filterNames[] = {
-        "point", "HQX", "xBR-lv2", NULL
+        "point", "HQX", "xBR-lv2", "xBRZ", NULL
     };
     return filterNames;
 }
@@ -608,16 +636,14 @@ struct SpriteRenderData {
     int cx, cy;
 };
 
-#define VIEW_TILE_SIZE  (2.0f / VIEWPORT_W)     //1.0f
-
 static void emitSprite(const Coords* loc, VisualId vid, void* user) {
     SpriteRenderData* rd = (SpriteRenderData*) user;
     float* rect = rd->rect;
-    const float halfTile = VIEW_TILE_SIZE * -0.5f;
     int uvIndex = VID_INDEX(vid);
 
-    rect[0] = halfTile + (float) (loc->x - rd->cx) * VIEW_TILE_SIZE;
-    rect[1] = halfTile + (float) (rd->cy - loc->y) * VIEW_TILE_SIZE;
+    // Make a quad with the view center as the origin.
+    rect[0] = (float) (loc->x - rd->cx) - 0.5f;
+    rect[1] = (float) (rd->cy - loc->y) - 0.5f;
     rd->attr = gpu_emitQuad(rd->attr, rect, rd->uvTable + uvIndex*4);
 #if 0
     printf("KR emitSprite %d,%d vid:%d:%d\n",
@@ -665,6 +691,7 @@ void screenUpdateMap(TileView* view, const Map* map, const Coords& center) {
     {
     SpriteRenderData rd;
     const Object* focusObj;
+    const float VIEW_TILE_SIZE = 1.0f;
 
     rd.uvTable = sp->textureInfo->tileTexCoord;
     rd.rect[2] = rd.rect[3] = VIEW_TILE_SIZE;
@@ -687,12 +714,16 @@ void screenUpdateMap(TileView* view, const Map* map, const Coords& center) {
 #endif
 
 /**
- * Redraw the screen.  If showmap is set, the normal map is drawn in
- * the map area.  If blackout is set, the map area is blacked out. If
- * neither is set, the map area is left untouched.
+ * Redraw the map & stats views.
+ *
+ * If showmap is set, the normal map is drawn in the map area.
+ * If blackout is set, the map area is blacked out.
+ * If neither is set, the map area is left untouched.
  */
 void screenUpdate(TileView *view, bool showmap, bool blackout) {
     ASSERT(c != NULL, "context has not yet been initialized");
+
+    c->stats->redraw();
 
     if (blackout)
     {
@@ -749,7 +780,6 @@ void screenUpdate(TileView *view, bool showmap, bool blackout) {
 #endif
     }
 
-    screenUpdateCursor();
     screenUpdateMoons();
     screenUpdateWind();
     screenUploadToGPU();
@@ -760,7 +790,25 @@ void screenUpdate(TileView *view, bool showmap, bool blackout) {
  * This function will be removed after GPU rendering is fully implemented.
  */
 void screenUploadToGPU() {
-    gpu_blitTexture(gpu_screenTexture(xu4.gpu), 0, 0, xu4.screenImage);
+    XU4_SCREEN->uploadScreen = 1;
+}
+
+static void screenUploadCursor(Screen* sp, uint32_t stex) {
+    int phase =                             // Rotations per second
+    //  (sp->state.currentCycle >> 1) & 3;  // 0.5 DOS (normal)
+        sp->state.currentCycle & 3;         // 1.0 C64, DOS (combat)
+
+    ASSERT(phase >= 0 && phase < 4, "derived an invalid cursor phase: %d", phase);
+    int cursorChar = 31 - phase;
+    const Image* charset = sp->charsetInfo->image;
+
+    // NOTE: This code requires the charset image to be one character wide.
+    int cdim = charset->width();
+    Image32 cimg;
+    cimg.pixels = charset->pixels + (cdim * cdim * cursorChar);
+    cimg.w = cimg.h = cdim;
+    gpu_blitTexture(stex, sp->state.cursorX * cdim, sp->state.cursorY * cdim,
+                    &cimg);
 }
 
 void screenRender() {
@@ -768,6 +816,16 @@ void screenRender() {
     void* gpu = xu4.gpu;
     ScreenState* ss = &sp->state;
     int offsetY = ss->aspectY;
+
+    if (sp->uploadScreen) {
+        sp->uploadScreen = 0;
+
+        uint32_t stex = gpu_screenTexture(xu4.gpu);
+        gpu_blitTexture(stex, 0, 0, xu4.screenImage);
+
+        if (sp->state.cursorVisible)
+            screenUploadCursor(sp, stex);
+    }
 
     if (ss->vertOffset) {
         offsetY -= ss->vertOffset;
@@ -800,6 +858,8 @@ void screenRender() {
 
         if (view->scissor)
             gpu_setScissor(NULL);
+
+        gpu_viewport(ss->aspectX, offsetY, ss->aspectW, ss->aspectH);
     }
 #endif
 
@@ -898,17 +958,6 @@ void screenCycle() {
     xu4.eventHandler->advanceFlourishAnim();
 }
 
-void screenUpdateCursor() {
-    Screen* scr = XU4_SCREEN;
-    int phase = scr->state.currentCycle * SCR_CYCLE_PER_SECOND / SCR_CYCLE_MAX;
-
-    ASSERT(phase >= 0 && phase < 4, "derived an invalid cursor phase: %d", phase);
-
-    if (scr->cursorStatus) {
-        screenShowChar(31 - phase, scr->cursorX, scr->cursorY);
-    }
-}
-
 void screenUpdateMoons() {
     int trammelChar, feluccaChar;
 
@@ -945,48 +994,23 @@ void screenUpdateWind() {
     }
 }
 
-// Private function for ReadChoiceController.
-int screenCursorEnabled() {
-    return XU4_SCREEN->cursorEnabled;
-}
-
 /*
 void screenDumpCursor() {
     Screen* scr = XU4_SCREEN;
-    printf("cursor %d,%d %d,%d\n", scr->cursorStatus, scr->cursorEnabled,
-            scr->cursorX, scr->cursorY);
+    printf("cursor %d %d,%d\n",
+            scr->state.cursorVisible, scr->state.cursorX, scr->state.cursorY);
 }
 */
 
-void screenShowCursor() {
-    Screen* scr = XU4_SCREEN;
-    if (! scr->cursorStatus && scr->cursorEnabled) {
-        scr->cursorStatus = 1;
-        screenUpdateCursor();
-    }
-}
-
-void screenHideCursor() {
-    Screen* scr = XU4_SCREEN;
-    if (scr->cursorStatus) {
-        screenEraseTextArea(scr->cursorX, scr->cursorY, 1, 1);
-    }
-    scr->cursorStatus = 0;
-}
-
-void screenEnableCursor(void) {
-    XU4_SCREEN->cursorEnabled = 1;
-}
-
-void screenDisableCursor(void) {
-    screenHideCursor();
-    XU4_SCREEN->cursorEnabled = 0;
+void screenShowCursor(bool on) {
+    XU4_SCREEN->state.cursorVisible = on;
 }
 
 void screenSetCursorPos(int x, int y) {
     Screen* scr = XU4_SCREEN;
-    scr->cursorX = x;
-    scr->cursorY = y;
+    scr->state.cursorVisible = true;
+    scr->state.cursorX = x;
+    scr->state.cursorY = y;
 }
 
 bool screenToggle3DDungeonView() {
@@ -1643,7 +1667,6 @@ void screenGemUpdate() {
 
     screenRedrawMapArea();
 
-    screenUpdateCursor();
     screenUpdateMoons();
     screenUpdateWind();
     screenUploadToGPU();

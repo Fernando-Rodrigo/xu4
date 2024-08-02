@@ -170,16 +170,18 @@ graphics: [
     tree: "vutne/145-tree.png" [
         moongate  0,152, 20,24
         items    24,152, 20,24
+        gate_pos  84,53, 1,1
     ]
     portal:  "vutne/146-portal.png"
     outside: "vutne/147-outside.png"
     inside:  "vutne/148-inside.png"
     wagon:   "vutne/149-wagon.png"
     gypsy:   "vutne/14a-gypsy.png"
-    abacus:  "vutne/14b-abacus.png"
-    image (name: abacus-beads filename: "u4/abacus.ega" width: 320 height: 200 depth: 4 filetype: u4lzw fixup: abacus) [
-        whitebead  8,187, 8,12
-        blackbead 24,187, 8,12
+    abacus:  "vutne/14b-abacus.png" [
+        whitebead 12,181, 7,11
+        blackbead 23,181, 7,11
+        bead_pos  128,18, 8,16
+        card_pos   22,16, 196,1
     ]
     cards1: "vutne/cards1.png" [
         honestycard         0,0, 80,112
@@ -216,7 +218,7 @@ graphics: [
     image (name: rune7 filename: "u4u/rune_7.ega" width: 320 height: 200 depth: 8 filetype: u4rle)
     image (name: rune8 filename: "u4u/rune_8.ega" width: 320 height: 200 depth: 8 filetype: u4rle)
     image (name: gemtiles filename: "vga/gem.png" tiles: 128)
-    dung: "vga/dungeonhall.png" [
+    dung_hall: "vga/dungeonhall.png" [
         dung0_lft_ew    0, 0, 16,176
         dung0_rgt_ew  160, 0, 16,176
         dung1_lft_ew   16, 8, 32,160

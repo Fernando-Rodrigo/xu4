@@ -39,9 +39,7 @@ class Config {
 public:
     virtual ~Config();
 
-    //const char** getGames();
-    //void setGame(const char* name);
-
+    char* gameTitle(char* buf) const;
     const char* symbolName( Symbol s ) const;
     Symbol intern( const char* name );
     void internSymbols( Symbol* table, uint16_t count, const char* name );
@@ -66,6 +64,7 @@ public:
     const CDIEntry* soundFile( uint32_t id ) const;
     const float*    voiceParts( uint32_t id ) const;
     int atlasImages(StringId spec, AtlasSubImage* images, int max);
+    void changeSoundtrack(const char* modName);
 #else
     const char* musicFile( uint32_t id );
     const char* soundFile( uint32_t id );

@@ -24,6 +24,7 @@
 #include "tileanim.h"
 #include "tileset.h"
 #include "tileview.h"
+#include "gpu.h"
 
 //#include "gpu_opengl.h"
 
@@ -41,6 +42,9 @@ extern uint32_t getTicks();
 #ifdef ANDROID
 #define DVERSION    "#version 310 es\n"
 #define PRECISION_F "precision mediump float;\n"
+#elif defined(USE_GLES)
+#define DVERSION    "#version 310 es\n"
+#define PRECISION_F "precision highp float;\n"
 #else
 #define DVERSION    "#version 330\n"
 #define PRECISION_F
@@ -105,6 +109,59 @@ static const uint8_t whitePixels[] = {
 
 #define SHADOW_DIM      512
 
+
+/*
+ * \param regionSizes   Number of float values in each region.
+ */
+WorkBuffer* gpu_allocWorkBuffer(const int* regionSizes, int regionCount)
+{
+    WorkBuffer* work;
+    size_t stSize = sizeof(WorkBuffer) +
+                    sizeof(WorkRegion) * (regionCount - 2);
+    size_t totalAttr;
+    int i;
+
+    assert(regionCount >= 2);
+    for (totalAttr = 0, i = 0; i < regionCount; ++i)
+        totalAttr += regionSizes[i];
+
+    work = (WorkBuffer*) malloc(stSize + sizeof(float) * totalAttr);
+    if (work) {
+        WorkRegion* reg = work->region;
+
+        work->attr = (float*) ((uint8_t*) work + stSize);
+        work->dirty = 0;
+        work->regionCount = regionCount;
+        for (totalAttr = 0, i = 0; i < regionCount; ++i) {
+            reg->start = totalAttr;
+            reg->avail = regionSizes[i];
+            totalAttr += regionSizes[i];
+            reg->used = 0;
+            ++reg;
+        }
+    }
+    return work;
+}
+
+void gpu_freeWorkBuffer(WorkBuffer* work)
+{
+    free(work);
+}
+
+float* gpu_beginRegion(WorkBuffer* work, int regionN)
+{
+    WorkRegion* reg = work->region + regionN;
+    reg->used = 0;
+    return work->attr + reg->start;
+}
+
+void gpu_endRegion(WorkBuffer* work, int regionN, float* attr)
+{
+    WorkRegion* reg = work->region + regionN;
+    reg->used = (attr - work->attr) - reg->start;
+    if (reg->used)
+        work->dirty |= 1 << regionN;
+}
 
 #ifdef _WIN32
 #include "glad.c"
@@ -284,15 +341,29 @@ static int compileSLFile(GLuint program, const char* filename, int scale)
     return res;
 }
 
-static void _defineAttributeLayout(GLuint vao, GLuint vbo)
+/*
+ * Set attribute sizes for contiguious locations starting with zero.
+ *
+ * The buffer to use is set by glBindBuffer() before calling.  This allows
+ * different parts of a buffer to have different layouts.
+ */
+static void _defineAttributeLayout(GLuint vao, uint16_t layout, GLsizei stride)
 {
+    int asize;
+    int loc = 0;        // Shader "layout(location = 0)"
+    uintptr_t offset = 0;
+
     glBindVertexArray(vao);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glEnableVertexAttribArray(LOC_POS);
-    glVertexAttribPointer(LOC_POS, 3, GL_FLOAT, GL_FALSE, ATTR_STRIDE, 0);
-    glEnableVertexAttribArray(LOC_UV);
-    glVertexAttribPointer(LOC_UV,  4, GL_FLOAT, GL_FALSE, ATTR_STRIDE,
-                          (const GLvoid*) 12);
+    //glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    while (layout) {
+        asize = layout & 7;
+        layout >>= 3;
+        glEnableVertexAttribArray(loc);
+        glVertexAttribPointer(loc, asize, GL_FLOAT, GL_FALSE, stride,
+                              (const GLvoid*) offset);
+        offset += sizeof(float) * asize;
+        ++loc;
+    }
 }
 
 #ifdef GPU_RENDER
@@ -380,13 +451,101 @@ static GLuint loadHQXTableImage(int scale)
     return loadTexture(lutFile, 0, GL_NEAREST, NULL);
 }
 
-static void reserveDrawList(const GLuint* vbo, int byteSize)
+enum VertexArrayDefOpcode {
+    VA_END,
+    VA_SINGLE,
+    VA_DOUBLE,
+    VA_STATIC,     // Single-buffered, static
+    VA_LAYOUT      // Interleaved attribute sizes (VA_ATTR)
+};
+
+#define VA_ATTR2(a,b)       ((b<<3) | a)
+#define VA_ATTR3(a,b,c)     ((c<<6) | (b<<3) | a)
+#define VA_ATTR4(a,b,c,d)   ((d<<9) | (c<<6) | (b<<3) | a)
+
+static const uint16_t _vertexArrayDef[] = {
+    VA_LAYOUT, VA_ATTR2(3,4),
+    VA_SINGLE, 800,     // GLOB_GUI_LIST
+    VA_DOUBLE, 200,     // GLOB_HUD_LIST0
+#ifdef GPU_RENDER
+    400, 20, 8,         // GLOB_DRAW_LIST0, GLOB_FX_LIST0, GLOB_MAPFX_LIST0
+#endif
+    VA_END
+};
+
+static void gpu_createVertexArrays(OpenGLResources* gr, const uint16_t* pc)
 {
-    int i;
-    for (i = 0; i < 2; ++i) {
-        glBindBuffer(GL_ARRAY_BUFFER, vbo[i]);
-        glBufferData(GL_ARRAY_BUFFER, byteSize, NULL, GL_DYNAMIC_DRAW);
+    DrawList* dl = gr->dl;
+    int op;
+    int bi = 0;
+    int inc = 1;
+    GLenum usage = GL_DYNAMIC_DRAW;
+    GLsizei stride = sizeof(float) * 3;
+    uint16_t layout = 3;
+
+    // Create the vertex buffers and layout objects.
+    glGenBuffers(GLOB_COUNT, gr->vbo);
+    glGenVertexArrays(GLOB_COUNT, gr->vao);
+
+    while (*pc != VA_END) {
+        op = *pc++;
+        switch (op) {
+            case VA_SINGLE:
+                inc = 1;
+                usage = GL_DYNAMIC_DRAW;
+                break;
+            case VA_DOUBLE:
+                inc = 2;
+                usage = GL_DYNAMIC_DRAW;
+                if (bi & 1)
+                    ++bi;       // Double-buffered array ids must be even!
+                break;
+            case VA_STATIC:
+                inc = 1;
+                usage = GL_STATIC_DRAW;
+                break;
+            case VA_LAYOUT:
+                layout = *pc++;
+                assert(layout);
+                stride = 0;
+                for (int asize = layout; asize; asize >>=3)
+                    stride += sizeof(float) * (asize & 7);
+                break;
+            default:
+                // op is number of quads.
+                dl->byteSize = op * stride * 6;
+                dl->bufI  = bi;
+                dl->dual  = (inc == 2) ? 1 : 0;
+                dl->fpv   = stride / sizeof(float);
+                dl->count = 0;
+                assert(bi < GLOB_COUNT);
+
+                // Reserve buffer data & define its layout.
+                for (int i = 0; i < inc; ++i) {
+                    glBindBuffer(GL_ARRAY_BUFFER, gr->vbo[bi]);
+                    glBufferData(GL_ARRAY_BUFFER, dl->byteSize, NULL, usage);
+                    _defineAttributeLayout(gr->vao[bi], layout, stride);
+                    ++bi;
+                }
+                ++dl;
+                break;
+        }
     }
+
+#ifdef GPU_RENDER
+    for (int i = 0; i < 4; ++i) {
+        bi = GLOB_MAP_CHUNK0 + i;
+        glBindBuffer(GL_ARRAY_BUFFER, gr->vbo[bi]);
+        _defineAttributeLayout(gr->vao[bi], VA_ATTR2(3,4), ATTR_STRIDE);
+    }
+#endif
+
+    // Create quad geometry.
+    glBindBuffer(GL_ARRAY_BUFFER, gr->vbo[GLOB_QUAD]);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quadAttr), quadAttr, GL_STATIC_DRAW);
+    _defineAttributeLayout(gr->vao[GLOB_QUAD], VA_ATTR2(3,4), ATTR_STRIDE);
+
+    glBindVertexArray(0);
 }
 
 const char* gpu_init(void* res, int w, int h, int scale, int filter)
@@ -409,19 +568,6 @@ const char* gpu_init(void* res, int w, int h, int scale, int filter)
     gr->tilesTex = 0;
     */
 
-    gr->dl[0].buf = GLOB_GUI_LIST0;
-    gr->dl[0].byteSize = ATTR_STRIDE * 6 * 400;
-    gr->dl[1].buf = GLOB_HUD_LIST0;
-    gr->dl[1].byteSize = ATTR_STRIDE * 6 * 400;
-#ifdef GPU_RENDER
-    gr->dl[2].buf = GLOB_DRAW_LIST0;
-    gr->dl[2].byteSize = ATTR_STRIDE * 6 * 400;
-    gr->dl[3].buf = GLOB_FX_LIST0;
-    gr->dl[3].byteSize = ATTR_STRIDE * 6 * 20;
-    gr->dl[4].buf = GLOB_MAPFX_LIST0;
-    gr->dl[4].byteSize = ATTR_STRIDE * 6 * 8;
-#endif
-
 #ifdef DEBUG_GL
     enableGLDebug();
 #endif
@@ -429,7 +575,7 @@ const char* gpu_init(void* res, int w, int h, int scale, int filter)
     // Create screen, white, noise & shadow textures.
     glGenTextures(TEXTURE_COUNT, &gr->screenTex);
     gpu_defineTex(gr->screenTex, 320, 200, NULL,
-#ifdef ANDROID
+#if defined(ANDROID) || defined(USE_GLES)
                   GL_RGBA,  // Must match glTexSubImage2D format.
 #else
                   GL_RGB,
@@ -467,7 +613,8 @@ const char* gpu_init(void* res, int w, int h, int scale, int filter)
 
 
     // Create scaler shader.
-    if (filter == 1 && scale > 1) {
+    if (scale > 1) {
+    if (filter == 1) {
         if (scale > 4)
             scale = 4;
 
@@ -481,28 +628,41 @@ const char* gpu_init(void* res, int w, int h, int scale, int filter)
 
         gr->slocScMat = glGetUniformLocation(sh, "MVPMatrix");
         gr->slocScDim = glGetUniformLocation(sh, "TextureSize");
-        gr->slocScTex = glGetUniformLocation(sh, "Texture");
-        gr->slocScLut = glGetUniformLocation(sh, "LUT");
+        cmap          = glGetUniformLocation(sh, "Texture");
+        mmap          = glGetUniformLocation(sh, "LUT");
 
         glUseProgram(sh);
         glUniformMatrix4fv(gr->slocScMat, 1, GL_FALSE, m4_identity);
         glUniform2f(gr->slocScDim, (float) (w / scale), (float) (h / scale));
-        glUniform1i(gr->slocScTex, GTU_CMAP);
-        glUniform1i(gr->slocScLut, GTU_SCALER_LUT);
+        glUniform1i(cmap, GTU_CMAP);
+        glUniform1i(mmap, GTU_SCALER_LUT);
     }
-    else if (filter == 2 && scale > 1) {
+    else if (filter == 2) {
         gr->scaler = sh = glCreateProgram();
         if (compileSLFile(sh, "xbr-lv2.glsl", scale))
             return "xbr-lv2.glsl";
 
-        gr->slocScMat = 0;
         gr->slocScDim = glGetUniformLocation(sh, "TextureSize");
-        gr->slocScTex = glGetUniformLocation(sh, "Texture");
-        gr->slocScLut = 0;
+        cmap          = glGetUniformLocation(sh, "Texture");
 
         glUseProgram(sh);
         glUniform2f(gr->slocScDim, (float) (w / scale), (float) (h / scale));
-        glUniform1i(gr->slocScTex, GTU_CMAP);
+        glUniform1i(cmap, GTU_CMAP);
+    }
+    else if (filter == 3) {
+        gr->scaler = sh = glCreateProgram();
+        if (compileSLFile(sh, "xbrz-freescale.glsl", scale))
+            return "xbr-freescale.glsl";
+
+        mmap          = glGetUniformLocation(sh, "OutputSize");
+        gr->slocScDim = glGetUniformLocation(sh, "TextureSize");
+        cmap          = glGetUniformLocation(sh, "Texture");
+
+        glUseProgram(sh);
+        glUniform2f(mmap, (float) w, (float) h);
+        glUniform2f(gr->slocScDim, (float) (w / scale), (float) (h / scale));
+        glUniform1i(cmap, GTU_CMAP);
+    }
     }
 
 
@@ -540,22 +700,26 @@ const char* gpu_init(void* res, int w, int h, int scale, int filter)
         return "msdf.glsl";
 
     gr->glyphTrans  = glGetUniformLocation(sh, "transform");
+    gr->glyphOrigin = glGetUniformLocation(sh, "origin");
     cmap            = glGetUniformLocation(sh, "cmap");
     mmap            = glGetUniformLocation(sh, "msdf");
     //gr->glyphRange  = glGetUniformLocation(sh, "screenPxRange");
-    gr->glyphBg     = glGetUniformLocation(sh, "bgColor");
+    //gr->glyphBg     = glGetUniformLocation(sh, "bgColor");
     gr->glyphFg     = glGetUniformLocation(sh, "fgColor");
+    gr->glyphWidget = glGetUniformLocation(sh, "widgetFx");
 
     glUseProgram(sh);
     {
     float ortho[16];
     m4_ortho(ortho, 0.0f, (float) w, 0.0f, (float) h, -1.0f, 1.0f);
     glUniformMatrix4fv(gr->glyphTrans, 1, GL_FALSE, ortho);
+    glUniform3f(gr->glyphOrigin, 0.0f, 0.0f, 0.0f);
     glUniform1i(cmap, GTU_CMAP);
     glUniform1i(mmap, GTU_MATERIAL);
-    glUniform4f(gr->glyphBg, 0.0, 0.0, 0.0, 0.0);
-    glUniform4f(gr->glyphFg, 1.0, 1.0, 1.0, 1.0);
     //glUniform1f(gr->glyphRange, 2.0);
+    //glUniform4f(gr->glyphBg, 0.0, 0.0, 0.0, 0.0);
+    glUniform4f(gr->glyphFg, 1.0, 1.0, 1.0, 1.0);
+    glUniform3f(gr->glyphWidget, -999.0f, 0.0f, 0.0f);
     }
 
 
@@ -592,29 +756,7 @@ const char* gpu_init(void* res, int w, int h, int scale, int filter)
     glUniform1i(gr->worldShadowMap, GTU_SHADOW);
 #endif
 
-
-    // Create our vertex buffers.
-    glGenBuffers(GLOB_COUNT, gr->vbo);
-
-    // Reserve space in the double-buffered draw lists.
-    reserveDrawList(gr->vbo + GLOB_GUI_LIST0, gr->dl[0].byteSize);
-    reserveDrawList(gr->vbo + GLOB_HUD_LIST0, gr->dl[1].byteSize);
-#ifdef GPU_RENDER
-    reserveDrawList(gr->vbo + GLOB_DRAW_LIST0, gr->dl[2].byteSize);
-    reserveDrawList(gr->vbo + GLOB_FX_LIST0,   gr->dl[3].byteSize);
-    reserveDrawList(gr->vbo + GLOB_MAPFX_LIST0,gr->dl[4].byteSize);
-#endif
-
-    // Create quad geometry.
-    glBindBuffer(GL_ARRAY_BUFFER, gr->vbo[GLOB_QUAD]);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(quadAttr), quadAttr, GL_STATIC_DRAW);
-
-    // Create vertex attribute layouts.
-    glGenVertexArrays(GLOB_COUNT, gr->vao);
-    for(int i = 0; i < GLOB_COUNT; ++i)
-        _defineAttributeLayout(gr->vao[i], gr->vbo[i]);
-    glBindVertexArray(0);
-
+    gpu_createVertexArrays(gr, _vertexArrayDef);
     return NULL;
 }
 
@@ -713,8 +855,10 @@ void gpu_drawTextureScaled(void* res, uint32_t tex)
 
     if (gr->scaler) {
         glUseProgram(gr->scaler);
-        glActiveTexture(GL_TEXTURE0 + GTU_SCALER_LUT);
-        glBindTexture(GL_TEXTURE_2D, gr->scalerLut);
+        if (gr->scalerLut) {
+            glActiveTexture(GL_TEXTURE0 + GTU_SCALER_LUT);
+            glBindTexture(GL_TEXTURE_2D, gr->scalerLut);
+        }
     } else {
         glUseProgram(gr->shadeColor);
         glUniformMatrix4fv(gr->slocTrans, 1, GL_FALSE, m4_identity);
@@ -759,21 +903,71 @@ void gpu_setScissor(int* box)
 }
 
 /*
- * Begin adding triangles to a double-buffered draw list.
+ * Transfer used regions of a work buffer to the GPU.
+ *
+ * /param list    The single-buffered GpuDrawList identifier.
+ */
+void gpu_updateWorkBuffer(void* res, int list, WorkBuffer* work)
+{
+    WorkRegion* reg;
+    float* data;
+    int32_t offset = -1;
+    int32_t attrEnd = 0;
+    uint32_t mod;
+
+    mod = work->dirty;
+    for (reg = work->region; mod; ++reg, mod >>= 1) {
+        if (mod & 1) {
+            if (offset < 0)
+                offset = reg->start;
+            attrEnd = reg->start + reg->used;
+        }
+    }
+    if (offset < 0)
+        return;
+
+    {
+    OpenGLResources* gr = (OpenGLResources*) res;
+    DrawList* dl = gr->dl + list;
+    glBindBuffer(GL_ARRAY_BUFFER, gr->vbo[ dl->bufI ]);
+    }
+
+    data = (float*) glMapBufferRange(GL_ARRAY_BUFFER,
+                                     sizeof(float) * offset,
+                                     sizeof(float) * (attrEnd - offset),
+                                     GL_MAP_WRITE_BIT);
+    if (data) {
+        mod = work->dirty;
+        for (reg = work->region; mod; ++reg, mod >>= 1) {
+            if (mod & 1) {
+                memcpy(data + (reg->start - offset),
+                       work->attr + reg->start,
+                       sizeof(float) * reg->used);
+            }
+        }
+        glUnmapBuffer(GL_ARRAY_BUFFER);
+    }
+    work->dirty = 0;
+}
+
+/*
+ * Begin adding triangles to a vertex buffer in GPU memory.
+ * If the list is double-buffered the active buffer will be switched first.
  *
  * Returns a pointer to the start of the attributes buffer.
  * This should be advanced and passed to gpu_endTris() when all triangles
  * have been generated.
  *
- * /param list  The list identifier in the range 0-2.
+ * /param list  The GpuDrawList identifier.
  */
 float* gpu_beginTris(void* res, int list)
 {
     OpenGLResources* gr = (OpenGLResources*) res;
     DrawList* dl = gr->dl + list;
 
-    dl->buf ^= 1;
-    glBindBuffer(GL_ARRAY_BUFFER, gr->vbo[ dl->buf ]);
+    if (dl->dual)
+        dl->bufI ^= 1;
+    glBindBuffer(GL_ARRAY_BUFFER, gr->vbo[ dl->bufI ]);
     gr->dptr = (GLfloat*) glMapBufferRange(GL_ARRAY_BUFFER, 0, dl->byteSize,
                                            GL_MAP_WRITE_BIT);
     return gr->dptr;
@@ -815,25 +1009,27 @@ void gpu_drawTris(void* res, int list)
 
     if (! dl->count)
         return;
-    //printf("gpu_drawTris %d\n", dl->count);
 
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glBlendEquation(GL_FUNC_ADD);
-
-#ifdef GPU_RENDER
-    if (list > GLOB_GUI_LIST1)
-        glUniformMatrix4fv(gr->worldTrans, 1, GL_FALSE, m4_identity);
-#endif
-    glBindVertexArray(gr->vao[ dl->buf ]);
-    glDrawArrays(GL_TRIANGLES, 0, dl->count / ATTR_COUNT);
+    //printf("gpu_drawTris(%d) count:%d fpv:%d\n", list, dl->count, dl->fpv);
+    glBindVertexArray(gr->vao[ dl->bufI ]);
+    glDrawArrays(GL_TRIANGLES, 0, dl->count / dl->fpv);
 }
 
-void gpu_drawGui(void* res, int list)
+void gpu_drawTrisRegion(void* res, int list, const WorkRegion* reg)
+{
+    OpenGLResources* gr = (OpenGLResources*) res;
+    DrawList* dl = gr->dl + list;
+    int attrCount = dl->fpv;
+    glBindVertexArray(gr->vao[ dl->bufI ]);
+    glDrawArrays(GL_TRIANGLES, reg->start / attrCount, reg->used / attrCount);
+}
+
+void gpu_enableGui(void* res, int wid, int mode)
 {
     OpenGLResources* gr = (OpenGLResources*) res;
 
     glUseProgram(gr->shadeGlyph);
+    glUniform3f(gr->glyphWidget, (wid < 0) ? -999.0f : -1.0f - wid, mode, 0.0f);
     /*
     glUniform4f(gr->glyphBg, 0.0, 0.0, 0.0, 1.0);
     glUniform4f(gr->glyphFg, 1.0, 1.0, 1.0, 1.0);
@@ -843,19 +1039,34 @@ void gpu_drawGui(void* res, int list)
     glActiveTexture(GL_TEXTURE0 + GTU_MATERIAL);
     glBindTexture(GL_TEXTURE_2D, gr->fontTex);
 
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glEnable(GL_BLEND);
+}
 
-    gpu_drawTris(gr, list);
+void gpu_drawGui(void* res, int list, int wid, int mode)
+{
+    gpu_enableGui(res, wid, mode);
+    gpu_drawTris(res, list);
 }
 
 void gpu_guiClutUV(void* res, float* uv, float colorIndex)
 {
     OpenGLResources* gr = (OpenGLResources*) res;
-    uv[0] = (colorIndex + 0.5f) / gr->guiTexSize[0];
-    uv[1] = 0.5f / gr->guiTexSize[1];
+    uv[0] = uv[2] = (colorIndex + 0.5f) / gr->guiTexSize[0];
+    uv[1] = uv[3] = 0.5f / gr->guiTexSize[1];
 }
 
-float* gpu_emitQuad(float* attr, const float* drawRect, const float* uvRect)
+void gpu_guiSetOrigin(void* res, float x, float y)
+{
+    OpenGLResources* gr = (OpenGLResources*) res;
+    glUniform3f(gr->glyphOrigin, x, y, 0.0f);
+}
+
+/*
+ * \param drawRect  Four values of (x, y, width, height).
+ */
+float* gpu_emitQuadPq(float* attr, const float* drawRect, const float* uvRect,
+                      float texP, float texQ)
 {
     float w = drawRect[2];
     float h = drawRect[3];
@@ -884,8 +1095,8 @@ float* gpu_emitQuad(float* attr, const float* drawRect, const float* uvRect)
 #define EMIT_UV(u,v) \
     *attr++ = u; \
     *attr++ = v; \
-    *attr++ = 0.0f; \
-    *attr++ = 0.0f
+    *attr++ = texP; \
+    *attr++ = texQ
 
     // NOTE: We only do writes to attr here (avoid memcpy).
 
@@ -912,6 +1123,11 @@ float* gpu_emitQuad(float* attr, const float* drawRect, const float* uvRect)
     EMIT_UV(uvRect[0], uvRect[3]);
 
     return attr;
+}
+
+float* gpu_emitQuad(float* attr, const float* drawRect, const float* uvRect)
+{
+    return gpu_emitQuadPq(attr, drawRect, uvRect, 0.0f, 0.0f);
 }
 
 #ifdef GPU_RENDER
@@ -1419,6 +1635,9 @@ void gpu_drawMap(void* res, const TileView* view, const float* tileUVs,
         }
     }
 
+    matrix[kX] = matrix[kY] = 0.0f;
+    glUniformMatrix4fv(gr->worldTrans, 1, GL_FALSE, matrix);
+
     if (fxUsed) {
         const int MAPFX_LIST = GLOB_MAPFX_LIST0 / 2;
         float rect[4];
@@ -1437,20 +1656,20 @@ void gpu_drawMap(void* res, const TileView* view, const float* tileUVs,
                     if (anim_valueI(MAP_ANIMATOR, it->anim))
                         continue;
 
-                    rect[0] = scale  * (xoff + it->x);
-                    rect[1] = scaleY * (yoff + it->y);
-                    rect[2] = scale  * it->w;
-                    rect[3] = scaleY * it->h;
+                    rect[0] = xoff + it->x;
+                    rect[1] = yoff + it->y;
+                    rect[2] = it->w;
+                    rect[3] = it->h;
 
                     //printf("KR fx %f,%f %f,%f\n", it->x, it->y, it->w, it->h);
                     fxAttr = gpu_emitQuad(fxAttr, rect, &it->u);
 #else
                     // NOTE: Width is doubled to allow flags to change
                     // direction in the shader.
-                    rect[0] = scale  * (xoff + it->x - it->w);
-                    rect[1] = scaleY * (yoff + it->y);
-                    rect[2] = scale  * it->w * 2.0f;
-                    rect[3] = scaleY * it->h;
+                    rect[0] = xoff + it->x - it->w;
+                    rect[1] = yoff + it->y;
+                    rect[2] = it->w * 2.0f;
+                    rect[3] = it->h;
 
                     fxAttr = gpu_emitQuadFlag(fxAttr, rect);
 #endif
@@ -1459,6 +1678,7 @@ void gpu_drawMap(void* res, const TileView* view, const float* tileUVs,
         }
         gpu_endTris(gr, MAPFX_LIST, fxAttr);
 
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glEnable(GL_BLEND);
         gpu_drawTris(gr, MAPFX_LIST);
     }

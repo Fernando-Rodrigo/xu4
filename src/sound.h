@@ -39,10 +39,13 @@ enum Sound {
     SOUND_GATE_OPEN,        // Intro moongate opening
     SOUND_STONE_FALLING,
     SOUND_WIND_GUST,
+    SOUND_UI_CLICK,
+    SOUND_UI_TICK,
+    SOUND_FIZZLE,
+    SOUND_IGNITE,
+    SOUND_SPELL_A,
+    SOUND_SPELL_Z = SOUND_SPELL_A+25,
 
-    //    SOUND_MISSED,
-    //    SOUND_CREATUREATTACK,
-    //    SOUND_PLAYERHIT,
     SOUND_MAX
 };
 
@@ -57,18 +60,20 @@ enum MusicTrack {
     MUSIC_DUNGEON,
     MUSIC_COMBAT,
     MUSIC_CASTLES,
+    MUSIC_MAX,
 
-    VOICE_LB,
+    VOICE_LB = MUSIC_MAX,
     VOICE_HW,
     VOICE_GYPSY,
-
-    MUSIC_MAX
+    VOICE_SPELL = 31
 };
 
 int soundInit(void);
 void soundDelete(void);
+void soundSuspend(int halt);
+void soundFreeResourceGroup(uint16_t group);
 
-void soundPlay(Sound sound, bool onlyOnce = true, int specificDurationInTicks = -1);
+void soundPlay(Sound sound, int specificDurationInTicks = -1);
 void soundSpeakLine(int streamId, int line, bool wait = false);
 
 int  soundDuration(Sound sound);

@@ -5,15 +5,13 @@
 #ifndef EVENT_H
 #define EVENT_H
 
+#include <cstddef>
 #include <list>
-#include <string>
 #include <vector>
 
 #include "anim.h"
 #include "controller.h"
 #include "types.h"
-
-using std::string;
 
 #define U4_UP           '['
 #define U4_DOWN         '/'
@@ -24,109 +22,37 @@ using std::string;
 #define U4_SPACE        ' '
 #define U4_ESC          27
 #define U4_ENTER        13
-#define U4_ALT          128
-#define U4_KEYPAD_ENTER 271
-#define U4_META         323
-#define U4_FKEY         282
-#define U4_RIGHT_SHIFT  303
-#define U4_LEFT_SHIFT   304
-#define U4_RIGHT_CTRL   305
-#define U4_LEFT_CTRL    306
-#define U4_RIGHT_ALT    307
-#define U4_LEFT_ALT     308
-#define U4_RIGHT_META   309
-#define U4_LEFT_META    310
 
-struct _MouseArea;
-class EventHandler;
-class TextView;
+// Key modifier masks.
+#define U4_ALT          0x080
+#define U4_META         0x200   // FIXME: Not handled by RecordCommand
 
-/**
- * A controller that invokes a key handler function.
- */
-class KeyHandler : public Controller {
-public:
-    typedef bool (*Callback)(int, void*);
+// The following are 0x100 + USB HID Usage Ids.
+#define U4_FKEY         0x13a
+#define U4_PAUSE        0x148
+#define U4_KEYPAD_ENTER 0x158
 
-    /* Static default key handler functions */
-    static bool defaultHandler(int key, void *data);
-    static bool ignoreKeys(int key, void *data);
-
-    KeyHandler(KeyHandler::Callback func, void* userData = NULL);
-    virtual bool keyPressed(int key);
-
-private:
-    Callback handler;
-    void* data;
+enum InputEventType {
+    IE_MOUSE_MOVE,
+    IE_MOUSE_PRESS,
+    IE_MOUSE_RELEASE,
+    IE_MOUSE_WHEEL
 };
 
-/**
- * A controller to read a string, terminated by the enter key.
- */
-class ReadStringController : public WaitableController<string> {
-public:
-    ReadStringController(int maxlen, int screenX, int screenY,
-                         TextView* view = NULL,
-                         const char* accepted_chars = NULL);
-
-    virtual bool keyPressed(int key);
-
-    static string get(int maxlen, int screenX, int screenY, const char *extraChars = NULL);
-    static string get(int maxlen, TextView *view, const char *extraChars = NULL);
-#ifdef IOS
-    void setValue(const string &utf8StringValue) {
-        value = utf8StringValue;
-    }
-#endif
-
-protected:
-    int maxlen, screenX, screenY;
-    TextView *view;
-    uint8_t accepted[16];   // Character bitset.
+enum ControllerMouseButton {
+    CMOUSE_LEFT = 1,
+    CMOUSE_MIDDLE,
+    CMOUSE_RIGHT
 };
 
-/**
- * A controller to read a integer, terminated by the enter key.
- * Non-numeric keys are ignored.
- */
-class ReadIntController : public ReadStringController {
-public:
-    ReadIntController(int maxlen, int screenX, int screenY);
-
-    static int get(int maxlen);
-    int getInt() const;
+struct InputEvent {
+    uint16_t type;      // InputEventType
+    uint16_t n;         // Button id
+    uint16_t state;     // Button mask
+    int16_t  x, y;      // Axis value
 };
 
-/**
- * A controller to read a single key from a provided list.
- */
-class ReadChoiceController : public WaitableController<int> {
-public:
-    ReadChoiceController(const string &choices);
-    virtual bool keyPressed(int key);
-
-    static char get(const string &choices);
-
-protected:
-    string choices;
-};
-
-/**
- * A controller to read a direction enter with the arrow keys.
- */
-class ReadDirController : public WaitableController<Direction> {
-public:
-    ReadDirController();
-    virtual bool keyPressed(int key);
-};
-
-class AnyKeyController : public Controller {
-public:
-    void wait();
-    void waitTimeout();
-    virtual bool keyPressed(int key);
-    virtual void timerFired();
-};
+//----------------------------------------------------------------------------
 
 /**
  * A class for handling timed events.
@@ -202,6 +128,9 @@ struct FrameSleep {
 
 typedef void(*updateScreenCallback)(void);
 
+struct _MouseArea;
+class TextView;
+
 /**
  * A class for handling game events.
  */
@@ -211,11 +140,25 @@ public:
     EventHandler(int gameCycleDuration, int frameDuration);
     ~EventHandler();
 
-    /* Static functions */
+    /* Static user input functions. */
+    static int       choosePlayer();
+    static int       readAlphaAction(char letter, const char* prompt);
+    static char      readChoice(const char* choices);
+    static Direction readDir();
+    static int       readInt(int maxlen);
+    static const char* readString(int maxlen, const char *extraChars = NULL);
+    static const char* readStringView(int maxlen, TextView *view,
+                                      const char *extraChars = NULL);
+    static void waitAnyKey();
+    static void waitAnyKeyTimeout();
     static bool wait_msecs(unsigned int msecs);
+    static void ignoreInput();
+
+    /* Static functions */
     static bool timerQueueEmpty();
     static int setKeyRepeat(int delay, int interval);
     static bool globalKeyHandler(int key);
+    static bool defaultKeyHandler(int key);
 
     /* Member functions */
     void setTimerInterval(int msecs);
@@ -225,6 +168,8 @@ public:
     /* Event functions */
     bool run();
     void setScreenUpdate(void (*updateScreen)(void));
+    void togglePause();
+    void expose();
 #if defined(IOS)
     void handleEvent(UIEvent *);
     static void controllerStopped_helper();
@@ -240,10 +185,6 @@ public:
     void setControllerDone(bool exit = true);
     bool getControllerDone();
     void quitGame();
-
-    /* Key handler functions */
-    void pushKeyHandler(KeyHandler::Callback func, void* data = NULL);
-    void popKeyHandler();
 
     /* Mouse area functions */
     void pushMouseAreaSet(const _MouseArea *mouseAreas);
@@ -269,6 +210,7 @@ public:
 
 protected:
     void handleInputEvents(Controller*, updateScreenCallback);
+    bool runPause();
 
     FrameSleep fs;
     uint32_t timerInterval;     // Milliseconds between timedEvents ticks.
@@ -281,12 +223,14 @@ protected:
     uint32_t recordClock;
     uint32_t recordLast;
 #endif
+    bool paused;
     bool controllerDone;
     bool ended;
     TimedEventMgr timedEvents;
     std::vector<Controller *> controllers;
     std::list<const _MouseArea*> mouseAreaSets;
     updateScreenCallback updateScreen;
+    char readStringBuf[33];
 };
 
 #endif

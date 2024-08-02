@@ -8,15 +8,10 @@
 #include <vector>
 
 #include "creature.h"
-#ifdef IOS
-#include "ios_helpers.h"
-#endif
 
 class Party;
 struct Weapon;
 struct Armor;
-
-typedef std::vector<class PartyMember *> PartyMemberVector;
 
 #define ALL_PLAYERS -1
 
@@ -108,7 +103,6 @@ public:
     virtual void addStatus(StatusType status);
     void adjustMp(int pts);
     void advanceLevel();
-    void applyEffect(Map*, TileEffect effect);
     void awardXp(int xp);
     bool heal(HealType type);
     virtual void removeStatus(StatusType status);
@@ -127,6 +121,9 @@ public:
     int  loseWeapon();
     virtual void putToSleep();
     virtual void wakeUp();
+
+    // Used by Party to directly clear status flags.
+    void clearStatus(StatusType st) { Creature::removeStatus(st); }
 
 protected:
     static MapTile tileForClass(int klass);
@@ -172,7 +169,7 @@ public:
     void adjustFood(int food);
     void adjustGold(int gold);
     void adjustKarma(KarmaAction action);
-    void applyEffect(Map*, TileEffect effect);
+    void applyEffect(int player, Map*, TileEffect effect);
     bool attemptElevation(Virtue virtue);
     bool burnTorch(int turns = 1);
     bool canEnterShrine(Virtue virtue);
@@ -190,6 +187,7 @@ public:
     CannotJoinError join(const char* name);
     bool lightTorch(int duration = 100, bool loseTorch = true);
     void quenchTorch();
+    bool applyRest(HealType);
     void reviveParty();
     MapTile getTransport() const;
     void setTransport(MapTile transport);
@@ -209,6 +207,7 @@ public:
 
     int size() const;
     PartyMember *member(int index) const;
+    int memberIndex(Creature* person) const;
 
 private:
     void initTransport(const MapTile& tile);
@@ -218,9 +217,6 @@ private:
     MapTile transport;
     int torchduration;
     int activePlayer;
-#ifdef IOS
-    friend void U4IOS::syncPartyMembersWithSaveGame();
-#endif
 };
 
 bool isPartyMember(const Object *punknown);

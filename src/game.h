@@ -31,35 +31,6 @@ typedef enum {
 } ViewMode;
 
 /**
- * A controller to read a player number.
- */
-class ReadPlayerController : public ReadChoiceController {
-public:
-    ReadPlayerController();
-    ~ReadPlayerController();
-    virtual bool keyPressed(int key);
-
-    int getPlayer();
-    int waitFor();
-};
-
-/**
- * A controller to handle input for commands requiring a letter
- * argument in the range 'a' - lastValidLetter.
- */
-class AlphaActionController : public WaitableController<int> {
-public:
-    AlphaActionController(char letter, const string &p) : lastValidLetter(letter), prompt(p) {}
-    bool keyPressed(int key);
-
-    static int get(char lastValidLetter, const string &prompt, EventHandler *eh = NULL);
-
-private:
-    char lastValidLetter;
-    string prompt;
-};
-
-/**
  * Controls interaction while Ztats are being displayed.
  */
 class ZtatsController : public WaitableController<void *> {
@@ -98,6 +69,7 @@ public:
     /* main game functions */
     void setMap(Map *map, bool saveLocation, const Portal *portal, TurnController *turnCompleter = NULL);
     int exitToParentMap();
+    MapId combatMapForTile(const Tile *groundTile, Object *obj);
     virtual void finishTurn();
 
     bool initContext();
@@ -110,6 +82,10 @@ public:
     Discourse vendorDisc;
     Discourse castleDisc;
     bool cutScene;
+    bool uniqueSpellSounds;
+    std::map<const Tile*, MapId> tileMap;
+    std::map<const Tile*, MapId> dungeontileMap;
+    void (*spellCastCallback)(int spell, int caster, int subject, int spellMp);
 
 private:
     static void gameNotice(int, void*, void*);
@@ -163,7 +139,7 @@ void gameDestroyAllCreatures();
 
 /* etc */
 void gameBadCommand();
-string gameGetInput(int maxlen = 32);
+const char* gameGetInput(int maxlen = 30);
 int gameGetPlayer(bool canBeDisabled, bool canBeActivePlayer);
 void gameGetPlayerForCommand(bool (*commandFn)(int player), bool canBeDisabled, bool canBeActivePlayer);
 void gameDamageParty(int minDamage, int maxDamage);

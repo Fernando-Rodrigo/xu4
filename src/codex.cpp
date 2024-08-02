@@ -68,7 +68,7 @@ static void pausedMessage(int sec, const char* msg) {
 /* slight pause before continuing */
 static void codexSlightPause() {
     screenMessage("\n");
-    screenDisableCursor();
+    screenHideCursor();
     screenUploadToGPU();
     EventHandler::wait_msecs(1000);
 }
@@ -81,16 +81,16 @@ void codexStart() {
     if(! codexInit(&codex))
         return;
 
+    // make the avatar alone
+    c->stats->setView(STATS_PARTY_OVERVIEW);
+    c->stats->showAvatarOnly(true);
+
     // disable the whirlpool cursor and black out the screen
 #ifdef IOS
     U4IOS::IOSHideGameControllerHelper hideControllsHelper;
 #endif
-    screenDisableCursor();
+    screenHideCursor();
     screenUpdate(&xu4.game->mapArea, false, true);
-
-    // make the avatar alone
-    c->stats->setView(STATS_PARTY_OVERVIEW);
-    c->stats->update(true);
 
     // change the view mode so the dungeon doesn't get shown
     gameSetViewMode(VIEW_CUTSCENE);
@@ -111,7 +111,7 @@ void codexStart() {
                 if (codexHandleInfinity(&codex)) {
                     codexHandleEndgame(&codex);
                     codexFree(&codex);
-                    xu4.eventHandler->pushKeyHandler(KeyHandler::ignoreKeys);
+                    EventHandler::ignoreInput();
                     return;     // Don't reset view mode - pause forever.
                 }
             }
@@ -122,6 +122,7 @@ void codexStart() {
 
     codexFree(&codex);
     gameSetViewMode(VIEW_NORMAL);
+    c->stats->showAvatarOnly(false);
 }
 
 /**
@@ -182,7 +183,6 @@ static void codexEject(CodexEjectCode code) {
     EventHandler::wait_msecs(2000);
 
     /* re-enable the cursor and show it */
-    screenEnableCursor();
     screenShowCursor();
 
     /* return view to normal and exit the Abyss */
@@ -281,7 +281,7 @@ ask_next:
     U4IOS::IOSConversationHelper::setIntroString((current < VIRT_MAX) ? "Which virtue?" : "Which principle?");
 #endif
     codex->word = gameGetInput();
-    screenDisableCursor();
+    screenHideCursor();
 
     if ((current < VIRT_MAX) &&
         (strcasecmp(codex->word.c_str(), getVirtueName(static_cast<Virtue>(current))) == 0)) {
@@ -336,19 +336,17 @@ ask_next:
 }
 
 static bool codexHandleInfinity(Codex* codex) {
-    ReadChoiceController pauseController("");
     int i;
 
     for (i = 0; i < 3; ++i) {
         if (i > 0)
             codexImpureThoughts();
 
-        screenEnableCursor();
+        screenShowCursor();
         screenMessage("\nAbove the din, the voice asks:\n\nIf all eight virtues of the Avatar combine into and are derived from the Three Principles of Truth, Love and Courage...");
         screenUploadToGPU();
 
-        xu4.eventHandler->pushController(&pauseController);
-        pauseController.waitFor();
+        EventHandler::waitAnyKey();
 
         screenMessage("\n\nThen what is the one thing which encompasses and is the whole of all undeniable Truth, unending Love, and unyielding Courage?\n\n");
 #ifdef IOS
@@ -404,10 +402,9 @@ correct:
 }
 
 static void codexHandleEndgame(Codex* codex) {
-    ReadChoiceController pauseController("");
     int i;
 
-    screenEnableCursor();
+    screenShowCursor();
 
 #ifdef IOS
     // Ugh, we now enter happy callback land, so I know how to do these things manually. Good thing I kept these separate functions.
@@ -437,12 +434,11 @@ static void codexHandleEndgame(Codex* codex) {
         }
         screenUploadToGPU();
 
-        xu4.eventHandler->pushController(&pauseController);
-        pauseController.waitFor();
+        EventHandler::waitAnyKey();
     }
 
     /* CONGRATULATIONS!... you have completed the game in x turns */
-    screenDisableCursor();
+    screenHideCursor();
     // Note: This text has leading spaces & should be centered.
     screenMessage("%s%d%s", codex->endgameText2[3].c_str(),
                   c->saveGame->moves,

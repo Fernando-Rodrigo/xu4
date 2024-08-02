@@ -11,6 +11,7 @@
 #include "debug.h"
 #include "mapmgr.h"
 #include "sound.h"
+#include "stats.h"
 #include "tileset.h"
 #include "utils.h"
 #include "weapon.h"
@@ -195,43 +196,6 @@ void PartyMember::advanceLevel() {
         event.player = this;
         gs_emitMessage(SENDER_PARTY, &event);
     }
-}
-
-/**
- * Apply an effect to the party member
- */
-void PartyMember::applyEffect(Map* map, TileEffect effect) {
-    if (isDead())
-        return;
-
-    switch (effect) {
-    case EFFECT_NONE:
-        break;
-    case EFFECT_LAVA:
-    case EFFECT_FIRE:
-        applyDamage(map, 16 + (xu4_random(32)));
-
-        /*else if (player == ALL_PLAYERS && xu4_random(2) == 0)
-            playerApplyDamage(&(c->saveGame->players[i]), 10 + (xu4_random(25)));*/
-        break;
-    case EFFECT_SLEEP:
-        soundPlay(SOUND_SLEEP, false);
-        putToSleep();
-        break;
-    case EFFECT_POISONFIELD:
-    case EFFECT_POISON:
-        if (getStatus() != STAT_POISONED) {
-            soundPlay(SOUND_POISON_EFFECT, false);
-            addStatus(STAT_POISONED);
-        }
-        break;
-    case EFFECT_ELECTRICITY: break;
-    default:
-        ASSERT(0, "invalid effect: %d", effect);
-    }
-
-    if (effect != EFFECT_NONE)
-        notifyOfChange();
 }
 
 /**
@@ -687,29 +651,86 @@ void Party::adjustKarma(KarmaAction action) {
 }
 
 /**
- * Apply effects to the entire party
+ * Apply effects to a player or the entire party.
  */
-void Party::applyEffect(Map* map, TileEffect effect) {
-    int i;
+void Party::applyEffect(int player, Map* map, TileEffect effect) {
+    PartyMember* pc;
+    int flashMask = 0;
+    int damageSound = SOUND_POISON_EFFECT;
+    int i, end;
+    bool always;
 
-    for (i = 0; i < size(); i++) {
-        switch(effect) {
+    if (player == ALL_PLAYERS) {
+        always = false;
+        i = 0;
+        end = size();
+    } else {
+        always = true;
+        i = player;
+        end = i + 1;
+    }
+
+    switch(effect) {
         case EFFECT_NONE:
         case EFFECT_ELECTRICITY:
-            members[i]->applyEffect(map, effect);
-            break;
+            return;
+
         case EFFECT_LAVA:
         case EFFECT_FIRE:
-        case EFFECT_SLEEP:
-            if (xu4_random(2) == 0)
-                members[i]->applyEffect(map, effect);
+bomb:
+            for (; i < end; i++) {
+                pc = members[i];
+                if (pc->isDead())
+                    continue;
+                if (always || xu4_random(2) == 0) {
+                    pc->applyDamage(map, 16 + xu4_random(32));
+                    flashMask |= 1 << i;
+                }
+            }
             break;
+
+        case EFFECT_SLEEP:
+            damageSound = SOUND_SLEEP;
+            for (; i < end; i++) {
+                pc = members[i];
+                if (pc->isDisabled())
+                    continue;
+                if (always || xu4_random(2) == 0) {
+                    // The original game has a single status field so sleeping
+                    // removes any poison.  Note it doesn't cure poison when
+                    // resting in camp as the status is not changed by Hole up.
+                    pc->clearStatus(STAT_POISONED);
+                    pc->putToSleep();
+                    flashMask |= 1 << i;
+                }
+            }
+            break;
+
         case EFFECT_POISONFIELD:
         case EFFECT_POISON:
-            if (xu4_random(5) == 0)
-                members[i]->applyEffect(map, effect);
+            for (; i < end; i++) {
+                pc = members[i];
+                if (pc->isDead() || pc->getStatus() == STAT_POISONED)
+                    continue;
+                if (always || xu4_random(5) == 0) {
+                    pc->addStatus(STAT_POISONED);
+                    flashMask |= 1 << i;
+                }
+            }
             break;
-        }
+
+        case EFFECT_ROCKS:
+            // The DOS game flashes all player stats, even for those not
+            // damaged.  Xu4 will only flash those affected.
+            soundPlay(SOUND_STONE_FALLING);
+            damageSound = SOUND_PARTY_STRUCK;
+            // Treat falling rocks and pits like bomb traps.
+            goto bomb;
+    }
+
+    if (flashMask) {
+        soundPlay(Sound(damageSound));
+        c->stats->flashPlayers(flashMask);
     }
 }
 
@@ -792,33 +813,30 @@ bool Party::donate(int quantity) {
 void Party::endTurn() {
     Location* loc = c->location;
     int i;
+    int nonCombat = (loc->context & CTX_NON_COMBAT) == loc->context;
+    int poisonedMask = 0;
 
     saveGame->moves++;
 
     for (i = 0; i < size(); i++) {
+        PartyMember* pc = members[i];
 
         /* Handle player status (only for non-combat turns) */
-        if ((loc->context & CTX_NON_COMBAT) == loc->context) {
+        if (nonCombat) {
 
             /* party members eat food (also non-combat) */
-            if (!members[i]->isDead())
+            if (! pc->isDead())
                 adjustFood(-1);
 
-            switch (members[i]->getStatus()) {
+            switch (pc->getStatus()) {
             case STAT_SLEEPING:
                 if (xu4_random(5) == 0)
-                    members[i]->wakeUp();
+                    pc->wakeUp();
                 break;
 
             case STAT_POISONED:
-                /* SOLUS
-                 * shouldn't play poison damage sound in combat,
-                 * yet if the PC takes damage just befor combat
-                 * begins, the sound is played  after the combat
-                 * screen appears
-                 */
-                soundPlay(SOUND_POISON_DAMAGE, false);
-                members[i]->applyDamage(loc->map, 2);
+                if (pc->applyDamage(loc->map, 2))
+                    poisonedMask |= 1 << i;
                 break;
 
             default:
@@ -827,12 +845,27 @@ void Party::endTurn() {
         }
 
         /* regenerate magic points */
-        if (!members[i]->isDisabled() && members[i]->getMp() < members[i]->getMaxMp())
+        if (! pc->isDisabled() && pc->getMp() < pc->getMaxMp())
             saveGame->players[i].mp++;
     }
 
+    /* FIXME: Starving uses a game message while poisoning does not.
+     * They should be handled in a similar manner.
+     */
+
+    if (poisonedMask) {
+        /* NOTE: In the DOS version the poisoned sound & status flash occurs
+         * for each PC separately.  Xu4 combines them.
+         *
+         * If the poison damage occurs just before combat begins, these
+         * effects may be observed after the combat screen appears.
+         */
+        soundPlay(SOUND_POISON_DAMAGE);
+        c->stats->flashPlayers(poisonedMask);
+    }
+
     /* The party is starving! */
-    if ((saveGame->food == 0) && ((loc->context & CTX_NON_COMBAT) == loc->context)) {
+    if ((saveGame->food == 0) && nonCombat) {
         PartyEvent event(PartyEvent::STARVING, 0);
         gs_emitMessage(SENDER_PARTY, &event);
     }
@@ -986,6 +1019,7 @@ bool Party::lightTorch(int duration, bool loseTorch) {
     torchduration += duration;
     saveGame->torchduration = torchduration;
 
+    soundPlay(SOUND_IGNITE);
     notifyOfChange();
 
     return true;
@@ -998,6 +1032,21 @@ void Party::quenchTorch() {
     torchduration = saveGame->torchduration = 0;
 
     notifyOfChange();
+}
+
+/**
+ * Restore each party member to max MP, and restore some HP.
+ * \return True if any member gained HP.
+ */
+bool Party::applyRest(HealType type) {
+    bool healed = false;
+    for (int i = 0; i < size(); i++) {
+        PartyMember *m = member(i);
+        m->setMp(m->getMaxMp());
+        if ((m->getHp() < m->getMaxHp()) && m->heal(type))
+            healed = true;
+    }
+    return healed;
 }
 
 /**
@@ -1135,4 +1184,13 @@ int Party::size() const {
  */
 PartyMember *Party::member(int index) const {
     return members[index];
+}
+
+int Party::memberIndex(Creature* person) const {
+    int count = members.size();
+    for (int i = 0; i < count; ++i) {
+        if (person == members[i])
+            return i;
+    }
+    return -1;
 }

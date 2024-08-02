@@ -43,17 +43,17 @@ static const char* vendorGoods[] = {
 const char* discourse_load(Discourse* dis, const char* resource)
 {
 #ifdef CONF_MODULE
-    if (resource[0] == 'N' && strlen(resource) == 4) {
+    if (resource[0] == 'N' && resource[4] == '\0') {
         const uint8_t* ub = (const uint8_t*) resource;
         dis->conv.id = CDI32(ub[0], ub[1], ub[2], ub[3]);
 
-        int32_t n = xu4.config->npcTalk(dis->conv.id);
-        if (! n)
+        int32_t blkN = xu4.config->npcTalk(dis->conv.id);
+        if (! blkN)
             return "Unable to load NPC talk chunk";
 
         dis->system = DISCOURSE_XU4_TALK;
-        //UThread* ut = xu4.config->boronThread();
-        //dis->convCount = ur_buffer(n)->used / 5;
+        UThread* ut = xu4.config->boronThread();
+        dis->convCount = ur_buffer(blkN)->used / DI_COUNT;
     } else
 #endif
     if (strcmp(resource, "vendors") == 0) {
@@ -137,7 +137,9 @@ bool discourse_run(const Discourse* dis, uint16_t entry, Person* npc)
 
     switch (dis->system) {
     case DISCOURSE_CASTLE:
+        c->hawkwindHack = true;
         talked = talkRunU4Castle(dis, entry, npc);
+        c->hawkwindHack = false;
         break;
 
     case DISCOURSE_U4_TLK:
@@ -150,7 +152,7 @@ bool discourse_run(const Discourse* dis, uint16_t entry, Person* npc)
     {
         int32_t blkN = xu4.config->npcTalk(dis->conv.id);
         if (blkN) {
-            talkRunBoron(dis, entry, npc);
+            talkRunBoron(blkN, entry, npc);
             talked = true;
         }
     }
@@ -163,13 +165,13 @@ bool discourse_run(const Discourse* dis, uint16_t entry, Person* npc)
 
 #ifdef USE_BORON
         // Make a valid Boron word! from names with spaces.
-        string word(c->location->map->getName());
+        std::string word(c->location->map->getName());
         replace(word.begin(), word.end(), ' ', '-');
 
         xu4.config->scriptEvalArg("talk-to %s '%s", goods[entry], word.c_str());
 #else
         // Load and run the appropriate script.
-        string ugood(goods[entry]);
+        std::string ugood(goods[entry]);
         ugood[0] = toupper(ugood[0]);   // Script baseId is case sensitive.
 
         Script* script = new Script();
@@ -215,6 +217,14 @@ int discourse_findName(const Discourse* dis, const char* name)
 const char* discourse_name(const Discourse* dis, uint16_t entry)
 {
     if (entry < dis->convCount) {
+#ifdef CONF_MODULE
+        if (dis->system == DISCOURSE_XU4_TALK) {
+            int32_t blkN = xu4.config->npcTalk(dis->conv.id);
+            if (blkN)
+                return talkNameBoron(blkN, entry);
+        }
+        else
+#endif
         if (dis->system == DISCOURSE_U4_TLK) {
             const U4Talk* tlk = ((const U4Talk*) dis->conv.table) + entry;
             return tlk->strings + tlk->name;

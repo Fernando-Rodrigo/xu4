@@ -22,6 +22,7 @@
 DungeonView::DungeonView(int x, int y, int columns, int rows) : TileView(x, y, rows, columns)
 , screen3dDungeonViewEnabled(true)
 {
+    viewBottom = y + height;
     spotTrapRange = -1;
 
     black  = tileset->getByName(Tile::sym.black)->getId();
@@ -158,7 +159,7 @@ void DungeonView::drawInDungeon(const MapTile& mt, int x_offset, int distance, D
     const int * nscale;
     int offset_multiplier = 0;
     int offset_adj = 0;
-    if (xu4.settings->videoType != GFX_EGA)
+    if (! egaGraphics)
     {
         lscale = & lscale_vga[0];
         nscale = & nscale_vga[0];
@@ -209,6 +210,11 @@ void DungeonView::drawInDungeon(const MapTile& mt, int x_offset, int distance, D
         int y_offset = std::max(0,(dscale[distance] - offset_adj) * offset_multiplier);
         int x = ((VIEWPORT_W * tileWidth / 2) + this->x) - (scaled->width() / 2);
         int y = ((VIEWPORT_H * tileHeight / 2) + this->y + y_offset) - (scaled->height() / 8);
+
+        // Clip VGA tiles at distance 0 to bottom of view.
+        int bottom = y + scaled->h;
+        if (bottom > viewBottom)
+            scaled->h -= bottom - viewBottom;
 
         Image::enableBlend(1);
         scaled->draw(x, y);
@@ -451,6 +457,8 @@ void DungeonView::cacheGraphicData() {
         name = xu4.config->intern(dngGraphicInfo[i].imageName);
         graphic[i].info = xu4.imageMgr->imageInfo(name, &graphic[i].sub);
     }
+
+    egaGraphics = (graphic[1].info->fixup == FIXUP_DUNGNS);
 }
 
 static void drawGraphic(const ImageInfo* info, const SubImage* subimage,
@@ -491,7 +499,7 @@ void DungeonView::drawWall(int index) {
     // FIXME: subimage2 is a horrible hack, needs to be cleaned up
     i2 = dngGraphicInfo[index].subimage2;
     if (i2) {
-        if (xu4.settings->videoType == GFX_EGA) {
+        if (egaGraphics) {
             x = dngGraphicInfo[index].ega_x2;
             y = dngGraphicInfo[index].ega_y2;
         } else {
